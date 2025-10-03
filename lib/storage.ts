@@ -62,6 +62,16 @@ export type Project = {
   };
 };
 
+/** Coach digest (structured) */
+export type CoachDigest = {
+  totals: { success: number; progress: number; effort: number; reframes: number };
+  recent: {
+    deposits: Array<{ type: DepositType; text: string; date: string }>;
+    reframes: Array<{ original: string; reframed: string; date: string }>;
+  };
+  summary: string; // compact human-readable line
+};
+
 /** ********************
  * LocalForage stores
  ********************* */
@@ -90,6 +100,9 @@ const projectsStore = localforage.createInstance({
  ********************* */
 export const todayKey = (): string => new Date().toISOString().slice(0, 10);
 
+const inLastDays = (iso: string, days = 7) =>
+  Date.now() - new Date(iso).getTime() < days * 24 * 60 * 60 * 1000;
+
 /** ********************
  * Deposits
  ********************* */
@@ -110,7 +123,7 @@ export async function listDeposits(): Promise<Deposit[]> {
   return arr.sort((a, b) => b.date.localeCompare(a.date));
 }
 
-/** Convenience names expected by app/page.tsx */
+/** Convenience alias used by pages */
 export const allDeposits = () => listDeposits();
 
 /** ********************
@@ -133,7 +146,6 @@ export async function listReframes(): Promise<Reframe[]> {
   return arr.sort((a, b) => b.date.localeCompare(a.date));
 }
 
-/** Convenience name expected by app/page.tsx */
 export const allReframes = () => listReframes();
 
 /** ********************
@@ -149,7 +161,6 @@ export async function markRoutineDone(
   return rec;
 }
 
-/** Alias expected by app/page.tsx */
 export const markRoutine = (routine: RoutineKey, date?: string) =>
   markRoutineDone(routine, date);
 
@@ -162,51 +173,76 @@ export async function listRoutineChecks(): Promise<RoutineCheck[]> {
 /** ********************
  * Coach digest & weekly series
  ********************* */
-export async function buildWeeklyDigest(): Promise<string> {
+
+/** Structured digest for the coach (last 7 days) */
+export async function digestForCoach(): Promise<CoachDigest> {
   const deposits = await listDeposits();
   const reframes = await listReframes();
-  const last7 = (d: string) =>
-    Date.now() - new Date(d).getTime() < 7 * 24 * 60 * 60 * 1000;
 
-  const deps = deposits.filter((d) => last7(d.date));
-  const refs = reframes.filter((r) => last7(r.date));
+  const deps7 = deposits.filter((d) => inLastDays(d.date, 7));
+  const refs7 = reframes.filter((r) => inLastDays(r.date, 7));
 
-  const counts = {
-    success: deps.filter((d) => d.type === "success").length,
-    progress: deps.filter((d) => d.type === "progress").length,
-    effort: deps.filter((d) => d.type === "effort").length,
-    reframes: refs.length,
+  const totals = {
+    success: deps7.filter((d) => d.type === "success").length,
+    progress: deps7.filter((d) => d.type === "progress").length,
+    effort: deps7.filter((d) => d.type === "effort").length,
+    reframes: refs7.length,
   };
 
-  return `Weekly totals — success:${counts.success}, progress:${counts.progress}, effort:${counts.effort}, reframes:${counts.reframes}`;
+  // Include up to 3 of the most recent items for color
+  const recentDeposits = deps7.slice(0, 3).map((d) => ({
+    type: d.type,
+    text: d.text,
+    date: d.date,
+  }));
+
+  const recentReframes = refs7.slice(0, 3).map((r) => ({
+    original: r.original,
+    reframed: r.reframed,
+    date: r.date,
+  }));
+
+  const summary = `Last 7d — success:${totals.success}, progress:${totals.progress}, effort:${totals.effort}, reframes:${totals.reframes}`;
+
+  return {
+    totals,
+    recent: { deposits: recentDeposits, reframes: recentReframes },
+    summary,
+  };
 }
 
-/** Alias expected by app/coach/page.tsx */
-export const digestForCoach = () => buildWeeklyDigest();
+/** Legacy one-line digest (string) to keep old callers working */
+export async function digestForCoachText(): Promise<string> {
+  const d = await digestForCoach();
+  return d.summary;
+}
 
-/** Time-series for charts: last 7 days, YYYY-MM-DD + count */
+/** Time-series for charts: last 7 days, YYYY-MM-DD + total */
 export async function weeklyDepositSeries(): Promise<
-  { date: string; count: number }[]
+  { date: string; total: number }[]
 > {
   const deposits = await listDeposits();
-  // Build last 7 day keys
+
+  // last 7 days keys
   const days: string[] = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
     days.push(d.toISOString().slice(0, 10));
   }
+
   const map = new Map<string, number>(days.map((d) => [d, 0]));
   for (const dep of deposits) {
     const key = dep.date.slice(0, 10);
     if (map.has(key)) map.set(key, (map.get(key) || 0) + 1);
   }
-  return days.map((d) => ({ date: d, count: map.get(d) || 0 }));
+
+  return days.map((d) => ({ date: d, total: map.get(d) || 0 }));
 }
 
-/** Simple “balance” helper = #deposits in last 7 days */
+/** # of deposits in last 7 days */
 export async function getWeeklyBalanceNumber(): Promise<number> {
   const series = await weeklyDepositSeries();
-  return series.reduce((sum, p) => sum + p.count, 0);
+  return series.reduce((sum, p) => sum + p.total, 0);
 }
 
 /** ********************
