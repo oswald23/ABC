@@ -196,8 +196,7 @@ export async function markRoutineDone(
   return rec;
 }
 
-/** Alias expected by app/page.tsx */
-// Accepts second arg as string (date) or boolean (ignored)
+/** Accepts second arg as string (date) or boolean (ignored) */
 export const markRoutine = (
   routine: RoutineKey,
   dateOrFlag?: string | boolean
@@ -205,7 +204,6 @@ export const markRoutine = (
   const date = typeof dateOrFlag === "string" ? dateOrFlag : undefined;
   return markRoutineDone(routine, date);
 };
-
 
 export async function listRoutineChecks(): Promise<RoutineCheck[]> {
   const arr: RoutineCheck[] = [];
@@ -286,13 +284,22 @@ export async function getWeeklyBalanceNumber(): Promise<number> {
 
 /** ********************
  * Projects
+ * Accepts either:
+ *   createProject("My Title")
+ * or
+ *   createProject({ title, pre, during, post })
  ********************* */
-export async function createProject(title: string): Promise<Project> {
+export async function createProject(
+  input: string | Partial<Project>
+): Promise<Project> {
   const id = uuidv4();
-  const p: Project = {
+  const now = new Date().toISOString();
+
+  // base/default project
+  const base: Project = {
     id,
-    title,
-    date: new Date().toISOString(),
+    title: "Untitled Project",
+    date: now,
     pre: {
       vaultNotes: [],
       affirmations: [],
@@ -311,8 +318,25 @@ export async function createProject(title: string): Promise<Project> {
       confidence: 0,
     },
   };
-  await projectsStore.setItem(id, p);
-  return p;
+
+  let merged: Project;
+
+  if (typeof input === "string") {
+    // Old style: createProject("My Title")
+    merged = { ...base, title: input };
+  } else {
+    // New style: createProject({ title, pre, during, post })
+    merged = {
+      ...base,
+      title: input.title ?? base.title,
+      pre: { ...base.pre, ...(input.pre || {}) },
+      during: { ...base.during, ...(input.during || {}) },
+      post: { ...base.post, ...(input.post || {}) },
+    };
+  }
+
+  await projectsStore.setItem(id, merged);
+  return merged;
 }
 
 export async function listProjects(): Promise<Project[]> {
