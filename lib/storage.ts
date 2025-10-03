@@ -2,9 +2,9 @@
 import localforage from "localforage";
 import { v4 as uuidv4 } from "uuid";
 
-/**
+/** ********************
  * Types
- */
+ ********************* */
 export type DepositType = "success" | "progress" | "effort";
 
 export type Deposit = {
@@ -62,9 +62,9 @@ export type Project = {
   };
 };
 
-/**
- * LocalForage instances
- */
+/** ********************
+ * LocalForage stores
+ ********************* */
 const depositsStore = localforage.createInstance({
   name: "cmc",
   storeName: "deposits",
@@ -85,10 +85,14 @@ const projectsStore = localforage.createInstance({
   storeName: "projects",
 });
 
-/**
- * -------- Deposits (success/progress/effort) ----------
- */
+/** ********************
+ * Utilities
+ ********************* */
+export const todayKey = (): string => new Date().toISOString().slice(0, 10);
 
+/** ********************
+ * Deposits
+ ********************* */
 export async function addDeposit(
   type: DepositType,
   text: string,
@@ -102,17 +106,16 @@ export async function addDeposit(
 
 export async function listDeposits(): Promise<Deposit[]> {
   const arr: Deposit[] = [];
-  await depositsStore.iterate<Deposit, void>((v) => {
-    arr.push(v);
-  });
-  // Newest first
+  await depositsStore.iterate<Deposit, void>((v) => arr.push(v));
   return arr.sort((a, b) => b.date.localeCompare(a.date));
 }
 
-/**
- * -------- Reframes ----------
- */
+/** Convenience names expected by app/page.tsx */
+export const allDeposits = () => listDeposits();
 
+/** ********************
+ * Reframes
+ ********************* */
 export async function addReframe(
   original: string,
   reframed: string,
@@ -126,16 +129,16 @@ export async function addReframe(
 
 export async function listReframes(): Promise<Reframe[]> {
   const arr: Reframe[] = [];
-  await reframesStore.iterate<Reframe, void>((v) => {
-    arr.push(v);
-  });
+  await reframesStore.iterate<Reframe, void>((v) => arr.push(v));
   return arr.sort((a, b) => b.date.localeCompare(a.date));
 }
 
-/**
- * -------- Routines (check off daily) ----------
- */
+/** Convenience name expected by app/page.tsx */
+export const allReframes = () => listReframes();
 
+/** ********************
+ * Routines
+ ********************* */
 export async function markRoutineDone(
   routine: RoutineKey,
   date = new Date().toISOString()
@@ -146,17 +149,19 @@ export async function markRoutineDone(
   return rec;
 }
 
+/** Alias expected by app/page.tsx */
+export const markRoutine = (routine: RoutineKey, date?: string) =>
+  markRoutineDone(routine, date);
+
 export async function listRoutineChecks(): Promise<RoutineCheck[]> {
   const arr: RoutineCheck[] = [];
-  await routinesStore.iterate<RoutineCheck, void>((v) => {
-    arr.push(v);
-  });
+  await routinesStore.iterate<RoutineCheck, void>((v) => arr.push(v));
   return arr.sort((a, b) => b.date.localeCompare(a.date));
 }
 
-/**
- * Utility: a tiny weekly digest for the Coach API to read (keeps OpenAI tokens low)
- */
+/** ********************
+ * Coach digest & weekly series
+ ********************* */
 export async function buildWeeklyDigest(): Promise<string> {
   const deposits = await listDeposits();
   const reframes = await listReframes();
@@ -176,10 +181,37 @@ export async function buildWeeklyDigest(): Promise<string> {
   return `Weekly totals — success:${counts.success}, progress:${counts.progress}, effort:${counts.effort}, reframes:${counts.reframes}`;
 }
 
-/**
- * -------- Projects (needed by /app/project/page.tsx) ----------
- */
+/** Alias expected by app/coach/page.tsx */
+export const digestForCoach = () => buildWeeklyDigest();
 
+/** Time-series for charts: last 7 days, YYYY-MM-DD + count */
+export async function weeklyDepositSeries(): Promise<
+  { date: string; count: number }[]
+> {
+  const deposits = await listDeposits();
+  // Build last 7 day keys
+  const days: string[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+    days.push(d.toISOString().slice(0, 10));
+  }
+  const map = new Map<string, number>(days.map((d) => [d, 0]));
+  for (const dep of deposits) {
+    const key = dep.date.slice(0, 10);
+    if (map.has(key)) map.set(key, (map.get(key) || 0) + 1);
+  }
+  return days.map((d) => ({ date: d, count: map.get(d) || 0 }));
+}
+
+/** Simple “balance” helper = #deposits in last 7 days */
+export async function getWeeklyBalanceNumber(): Promise<number> {
+  const series = await weeklyDepositSeries();
+  return series.reduce((sum, p) => sum + p.count, 0);
+}
+
+/** ********************
+ * Projects
+ ********************* */
 export async function createProject(title: string): Promise<Project> {
   const id = uuidv4();
   const p: Project = {
@@ -210,9 +242,7 @@ export async function createProject(title: string): Promise<Project> {
 
 export async function listProjects(): Promise<Project[]> {
   const arr: Project[] = [];
-  await projectsStore.iterate<Project, void>((v) => {
-    arr.push(v);
-  });
+  await projectsStore.iterate<Project, void>((v) => arr.push(v));
   return arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 }
 
@@ -236,16 +266,4 @@ export async function updateProject(
   };
   await projectsStore.setItem(id, merged);
   return merged;
-}
-
-/**
- * -------- Confidence Balance ----------
- * Simple helper: count deposits (past 7 days) as a “balance” proxy.
- */
-export async function getWeeklyBalanceNumber(): Promise<number> {
-  const deps = await listDeposits();
-  const last7 = deps.filter(
-    (d) => Date.now() - new Date(d.date).getTime() < 7 * 24 * 60 * 60 * 1000
-  );
-  return last7.length;
 }
