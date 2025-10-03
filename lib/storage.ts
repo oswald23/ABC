@@ -197,8 +197,15 @@ export async function markRoutineDone(
 }
 
 /** Alias expected by app/page.tsx */
-export const markRoutine = (routine: RoutineKey, date?: string) =>
-  markRoutineDone(routine, date);
+// Accepts second arg as string (date) or boolean (ignored)
+export const markRoutine = (
+  routine: RoutineKey,
+  dateOrFlag?: string | boolean
+) => {
+  const date = typeof dateOrFlag === "string" ? dateOrFlag : undefined;
+  return markRoutineDone(routine, date);
+};
+
 
 export async function listRoutineChecks(): Promise<RoutineCheck[]> {
   const arr: RoutineCheck[] = [];
