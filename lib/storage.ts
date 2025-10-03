@@ -99,20 +99,36 @@ const projectsStore = localforage.createInstance({
  * Utilities
  ********************* */
 export const todayKey = (): string => new Date().toISOString().slice(0, 10);
-
 const inLastDays = (iso: string, days = 7) =>
   Date.now() - new Date(iso).getTime() < days * 24 * 60 * 60 * 1000;
 
 /** ********************
  * Deposits
+ * Accepts either:
+ *   addDeposit('success', 'Did X', '2025-10-03T...')
+ * or
+ *   addDeposit({ type:'success', text:'Did X', date?:string })
  ********************* */
 export async function addDeposit(
-  type: DepositType,
-  text: string,
+  typeOrObj: DepositType | { type: DepositType; text: string; date?: string },
+  text?: string,
   date = new Date().toISOString()
 ): Promise<Deposit> {
+  let type: DepositType;
+  let finalText: string;
+  let finalDate: string = date;
+
+  if (typeof typeOrObj === "object") {
+    type = typeOrObj.type;
+    finalText = typeOrObj.text;
+    finalDate = typeOrObj.date ?? new Date().toISOString();
+  } else {
+    type = typeOrObj;
+    finalText = text ?? "";
+  }
+
   const id = uuidv4();
-  const d: Deposit = { id, date, type, text };
+  const d: Deposit = { id, date: finalDate, type, text: finalText };
   await depositsStore.setItem(id, d);
   return d;
 }
@@ -128,14 +144,33 @@ export const allDeposits = () => listDeposits();
 
 /** ********************
  * Reframes
+ * Accepts either:
+ *   addReframe("orig", "reframed", '2025-10-03T...')
+ * or
+ *   addReframe({ original:"orig", reframed:"reframed", date?:string })
  ********************* */
 export async function addReframe(
-  original: string,
-  reframed: string,
+  originalOrObj:
+    | string
+    | { original: string; reframed: string; date?: string },
+  reframed?: string,
   date = new Date().toISOString()
 ): Promise<Reframe> {
+  let original: string;
+  let finalReframed: string;
+  let finalDate: string = date;
+
+  if (typeof originalOrObj === "object") {
+    original = originalOrObj.original;
+    finalReframed = originalOrObj.reframed;
+    finalDate = originalOrObj.date ?? new Date().toISOString();
+  } else {
+    original = originalOrObj;
+    finalReframed = reframed ?? "";
+  }
+
   const id = uuidv4();
-  const r: Reframe = { id, date, original, reframed };
+  const r: Reframe = { id, date: finalDate, original, reframed: finalReframed };
   await reframesStore.setItem(id, r);
   return r;
 }
@@ -161,6 +196,7 @@ export async function markRoutineDone(
   return rec;
 }
 
+/** Alias expected by app/page.tsx */
 export const markRoutine = (routine: RoutineKey, date?: string) =>
   markRoutineDone(routine, date);
 
@@ -173,8 +209,6 @@ export async function listRoutineChecks(): Promise<RoutineCheck[]> {
 /** ********************
  * Coach digest & weekly series
  ********************* */
-
-/** Structured digest for the coach (last 7 days) */
 export async function digestForCoach(): Promise<CoachDigest> {
   const deposits = await listDeposits();
   const reframes = await listReframes();
@@ -189,7 +223,6 @@ export async function digestForCoach(): Promise<CoachDigest> {
     reframes: refs7.length,
   };
 
-  // Include up to 3 of the most recent items for color
   const recentDeposits = deps7.slice(0, 3).map((d) => ({
     type: d.type,
     text: d.text,
@@ -211,7 +244,7 @@ export async function digestForCoach(): Promise<CoachDigest> {
   };
 }
 
-/** Legacy one-line digest (string) to keep old callers working */
+/** Legacy one-line digest (string) */
 export async function digestForCoachText(): Promise<string> {
   const d = await digestForCoach();
   return d.summary;
@@ -223,7 +256,6 @@ export async function weeklyDepositSeries(): Promise<
 > {
   const deposits = await listDeposits();
 
-  // last 7 days keys
   const days: string[] = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
