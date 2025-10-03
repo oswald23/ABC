@@ -1,6 +1,18 @@
 // lib/storage.ts
 import localforage from "localforage";
-import { v4 as uuidv4 } from "uuid";
+
+/** Small ID helper: uses crypto.randomUUID() when available */
+const newId = (): string => {
+  // Browser & modern Node (Vercel) expose global crypto.randomUUID
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    // @ts-ignore - TS knows crypto from DOM lib; safe in modern runtimes
+    return crypto.randomUUID();
+  }
+  // Fallback: not cryptographically strong, but fine for local IDs
+  return (
+    Math.random().toString(36).slice(2) + "-" + Date.now().toString(36)
+  );
+};
 
 /** ********************
  * Types
@@ -127,7 +139,7 @@ export async function addDeposit(
     finalText = text ?? "";
   }
 
-  const id = uuidv4();
+  const id = newId();
   const d: Deposit = { id, date: finalDate, type, text: finalText };
   await depositsStore.setItem(id, d);
   return d;
@@ -169,7 +181,7 @@ export async function addReframe(
     finalReframed = reframed ?? "";
   }
 
-  const id = uuidv4();
+  const id = newId();
   const r: Reframe = { id, date: finalDate, original, reframed: finalReframed };
   await reframesStore.setItem(id, r);
   return r;
@@ -190,7 +202,7 @@ export async function markRoutineDone(
   routine: RoutineKey,
   date = new Date().toISOString()
 ): Promise<RoutineCheck> {
-  const id = uuidv4();
+  const id = newId();
   const rec: RoutineCheck = { id, date, routine, done: true };
   await routinesStore.setItem(id, rec);
   return rec;
@@ -292,7 +304,7 @@ export async function getWeeklyBalanceNumber(): Promise<number> {
 export async function createProject(
   input: string | Partial<Project>
 ): Promise<Project> {
-  const id = uuidv4();
+  const id = newId();
   const now = new Date().toISOString();
 
   // base/default project
