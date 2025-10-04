@@ -1,0 +1,302 @@
+{
+  "name": "Daily AI Trade Snapshot → Email (5:35 PM Dubai, with ML service)",
+  "nodes": [
+    {
+      "id": "Cron-Trigger",
+      "name": "⏰ Daily 17:35 (Dubai)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 2,
+      "position": [260, 300],
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyDay",
+              "hour": 17,
+              "minute": 35
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "Set-Config",
+      "name": "🧰 Set Config & Tickers",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [520, 300],
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            { "name": "alphavantage_key", "value": "{{ALPHAVANTAGE_API_KEY}}" },
+            { "name": "tavily_key", "value": "{{TAVILY_API_KEY}}" },
+            { "name": "openai_key", "value": "{{OPENAI_API_KEY}}" },
+            { "name": "predict_url", "value": "http://ml-service:8000/predict" },
+            { "name": "smtp_from", "value": "Tarzan AI <aguiaroswald73@gmail.com>" },
+            { "name": "recipient_email", "value": "aguiaroswald73@gmail.com" }
+          ],
+          "array": [
+            {
+              "name": "tickers",
+              "value": ["AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","AMD","AVGO","NFLX"]
+            }
+          ],
+          "number": [
+            { "name": "atr_window", "value": 14 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "Build-Items",
+      "name": "🧩 Build Items per Ticker",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [760, 300],
+      "parameters": {
+        "functionCode": "const cfg = $items('🧰 Set Config & Tickers', 0).json; const tickers = cfg.tickers || []; return tickers.map(t => ({ json: { symbol: t, alphavantage_key: cfg.alphavantage_key, tavily_key: cfg.tavily_key, openai_key: cfg.openai_key, predict_url: cfg.predict_url } }));"
+      }
+    },
+    {
+      "id": "AV-Price",
+      "name": "📈 AlphaVantage: Daily Prices",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1000, 220],
+      "parameters": {
+        "requestMethod": "GET",
+        "url": "https://www.alphavantage.co/query",
+        "responseFormat": "json",
+        "queryParametersUi": {
+          "parameter": [
+            { "name": "function", "value": "TIME_SERIES_DAILY_ADJUSTED" },
+            { "name": "symbol", "value": "={{$items('🧩 Build Items per Ticker',$itemIndex).json.symbol}}" },
+            { "name": "outputsize", "value": "compact" },
+            { "name": "apikey", "value": "={{$items('🧩 Build Items per Ticker',$itemIndex).json.alphavantage_key}}" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "AV-Earnings",
+      "name": "📅 AlphaVantage: Earnings Calendar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1000, 380],
+      "parameters": {
+        "requestMethod": "GET",
+        "url": "https://www.alphavantage.co/query",
+        "responseFormat": "json",
+        "queryParametersUi": {
+          "parameter": [
+            { "name": "function", "value": "EARNINGS_CALENDAR" },
+            { "name": "symbol", "value": "={{$items('🧩 Build Items per Ticker',$itemIndex).json.symbol}}" },
+            { "name": "horizon", "value": "3month" },
+            { "name": "apikey", "value": "={{$items('🧩 Build Items per Ticker',$itemIndex).json.alphavantage_key}}" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "Tavily",
+      "name": "🔎 Tavily: Evidence Links",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1240, 300],
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://api.tavily.com/search",
+        "jsonParameters": true,
+        "responseFormat": "json",
+        "headerParametersUi": {
+          "parameter": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "bodyParametersJson": "={{ JSON.stringify({ api_key: $items('🧩 Build Items per Ticker',$itemIndex).json.tavily_key, query: $items('🧩 Build Items per Ticker',$itemIndex).json.symbol + ' stock latest catalysts earnings guidance options flow site:bloomberg.com OR site:reuters.com OR site:seekingalpha.com OR site:sec.gov', search_depth: 'advanced', max_results: 5 }) }}"
+      }
+    },
+    {
+      "id": "Assemble",
+      "name": "🧮 Assemble Per-Ticker Metrics",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [1480, 300],
+      "parameters": {
+        "functionCode": "function parseSeries(ts){ const arr=[]; for (const [date,o] of Object.entries(ts||{})){ arr.push({ date, open:Number(o['1. open']), high:Number(o['2. high']), low:Number(o['3. low']), close:Number(o['4. close']), volume:Number(o['6. volume']||o['5. volume']||0) }); } arr.sort((a,b)=> new Date(a.date)-new Date(b.date)); return arr; } function atr14FromSeries(series){ if(series.length<15) return null; const trs=[]; for(let i=1;i<series.length;i++){ const h=series[i].high,l=series[i].low,cPrev=series[i-1].close; trs.push(Math.max(h-l, Math.abs(h-cPrev), Math.abs(l-cPrev))); } if(trs.length<14) return null; const last14=trs.slice(-14); return last14.reduce((a,b)=>a+b,0)/14; } const priceNode = $items('📈 AlphaVantage: Daily Prices',$itemIndex).json || {}; const earnNode = $items('📅 AlphaVantage: Earnings Calendar',$itemIndex).json || {}; const tavNode = $items('🔎 Tavily: Evidence Links',$itemIndex).json || {}; const ts = priceNode['Time Series (Daily)'] || {}; const series = parseSeries(ts); const latest = series[series.length-1] || {}; const currentPrice = latest.close || null; const atr14 = atr14FromSeries(series); const last50 = series.slice(-50); const avgVol50 = last50.length ? last50.reduce((a,b)=>a+(b.volume||0),0)/last50.length : null; const avgDollarVol = (currentPrice && avgVol50) ? currentPrice*avgVol50 : null; let nextEarnings = null; try{ const arr = Array.isArray(earnNode) ? earnNode : (earnNode.earnings || earnNode.Earnings || []); if(Array.isArray(arr) && arr.length){ nextEarnings = arr[0].reportDate || arr[0].fiscalDateEnding || arr[0].date || null; } }catch(_){} const links = (tavNode.results||[]).map(r=>r.url).slice(0,5); return [{ json: { symbol: $items('🧩 Build Items per Ticker',$itemIndex).json.symbol, currentPrice, atr14, avgDollarVol, nextEarnings, evidenceLinks: links, series } }];"
+      }
+    },
+    {
+      "id": "Predict-API",
+      "name": "🧠 Predict via FastAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1720, 300],
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "={{$items('🧰 Set Config & Tickers',0).json.predict_url}}",
+        "jsonParameters": true,
+        "responseFormat": "json",
+        "headerParametersUi": {
+          "parameter": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "bodyParametersJson": "={{ JSON.stringify({ symbol: $json.symbol, ohlcv: $json.series, horizon_days: 5 }) }}"
+      }
+    },
+    {
+      "id": "Join-Preds",
+      "name": "🔗 Join Metrics + Predictions",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [1960, 300],
+      "parameters": {
+        "functionCode": "const base = $items('🧮 Assemble Per-Ticker Metrics', $itemIndex).json; const pred = $json; return [{ json: { ...base, model: pred } }];"
+      }
+    },
+    {
+      "id": "Craft-Prompt",
+      "name": "🧾 Craft GPT Prompt (Locked Format)",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [2200, 300],
+      "parameters": {
+        "functionCode": "function blackoutFlag(d){ if(!d) return false; const td=new Date(); const ed=new Date(d); const diff=Math.round((ed-td)/(1000*60*60*24)); return Math.abs(diff)<=1; } const ctx = items.map(i=>({ ticker:i.json.symbol, current_price:i.json.currentPrice, atr14:i.json.atr14, avg_dollar_volume:i.json.avgDollarVol, next_earnings:i.json.nextEarnings, earnings_blackout:blackoutFlag(i.json.nextEarnings), evidence_links:i.json.evidenceLinks, predicted_price:i.json.model?.predicted_price, exp_return_pct:i.json.model?.exp_return_pct, by_when:i.json.model?.by_when, prob_up:i.json.model?.prob_up, confidence:i.json.model?.confidence, range_low:i.json.model?.range_low, range_high:i.json.model?.range_high, limit_order:i.json.model?.limit_order, stop_loss:i.json.model?.stop_loss, backtest:i.json.model?.backtest })); const system = `You are an equity trading research copilot. Use PROVIDED MODEL OUTPUTS EXACTLY for all numeric fields; do not alter or invent numbers. If any field is missing, print 'N/A'. Enforce: - Risk Filters (HARD): average daily $ volume > $20M, bid-ask spread < 30 bps (flag if unknown), event blackout T–1 to T+1 unless explicit catalyst. - Modeling summary must state: direction model = (XGBoost + Logistic Regression ensemble on >=+6% move), magnitude model = quantile regression (q10/q50/q90) on 2y rolling w/ walk-forward validation. Confidence % = calibrated prob × ensemble agreement (already provided). - Hallucination guard: every driver must include at least one evidence link provided. LOCKED OUTPUT FORMAT (print exactly): --- Market Snapshot (Quick Take) VIX level + volatility regime note SPX/Nasdaq short-term trend (up, down, flat) Notable catalysts (earnings, sector moves, macro policy shifts) Key risk flags (event risk, volatility, Fed announcements, geopolitical) --- LONG Candidates Ticker\\tCurrent Price\\tPredicted Price\\tExp. Return %\\tBy-When\\tConfidence %\\tLimit Order\\tStop Loss\\tRationale (3)\\tRisks (2)\\tEvidence Links --- DROP / Buy-the-Dip Candidates Ticker\\tCurrent Price\\tPredicted Price\\tExp. Return %\\tBy-When\\tConfidence %\\tBuy Limit\\tProtective Stop\\tRationale (3)\\tRisks (2)\\tEvidence Links --- Positioning & Risk Guidance Per-trade max risk: 0.5–1.0% of account Stops: no looser than 1.2× ATR(14); tighten if catalyst fades Take-profit: stagger exits at +6% / +9% / trailing stop Kill-switch: if 3 consecutive stops or daily P/L < –2%, stand down next session Include a brief backtest summary (12-month hit-rate, avg return, worst drawdown). Apply hallucination guard: no unsupported claims — every driver must have a valid evidence link. If signals are too weak (<55% confidence), trigger fallback → “No-trade / Low-conviction Watchlist” with tickers to monitor and conditions that would turn them into trades.`; const user = { today_iso: new Date().toISOString(), tickers: ctx }; return [{ json: { system, user } }];"
+      }
+    },
+    {
+      "id": "OpenAI",
+      "name": "🤖 OpenAI Chat (gpt-5-mini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2440, 300],
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "jsonParameters": true,
+        "responseFormat": "json",
+        "headerParametersUi": {
+          "parameter": [
+            { "name": "Authorization", "value": "={{'Bearer '+ $items('🧰 Set Config & Tickers',0).json.openai_key}}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "bodyParametersJson": "={{ JSON.stringify({ model: 'gpt-5-mini', temperature: 0.1, messages: [ { role: 'system', content: $json.system }, { role: 'user', content: JSON.stringify($json.user) } ] }) }}"
+      }
+    },
+    {
+      "id": "Extract",
+      "name": "📝 Extract Report Text",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [2680, 300],
+      "parameters": {
+        "functionCode": "const content = items[0]?.json?.choices?.[0]?.message?.content || JSON.stringify(items[0].json); return [{ json: { report: content } }];"
+      }
+    },
+    {
+      "id": "Email",
+      "name": "📧 Send Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [2920, 300],
+      "parameters": {
+        "fromEmail": "={{$items('🧰 Set Config & Tickers',0).json.smtp_from}}",
+        "toEmail": "={{$items('🧰 Set Config & Tickers',0).json.recipient_email}}",
+        "subject": "📊 Daily AI Trade Snapshot",
+        "emailFormat": "text",
+        "text": "={{$json.report}}"
+      }
+    }
+  ],
+  "connections": {
+    "⏰ Daily 17:35 (Dubai)": {
+      "main": [
+        [
+          { "node": "🧰 Set Config & Tickers", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🧰 Set Config & Tickers": {
+      "main": [
+        [
+          { "node": "🧩 Build Items per Ticker", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🧩 Build Items per Ticker": {
+      "main": [
+        [
+          { "node": "📈 AlphaVantage: Daily Prices", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "📈 AlphaVantage: Daily Prices": {
+      "main": [
+        [
+          { "node": "📅 AlphaVantage: Earnings Calendar", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "📅 AlphaVantage: Earnings Calendar": {
+      "main": [
+        [
+          { "node": "🔎 Tavily: Evidence Links", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🔎 Tavily: Evidence Links": {
+      "main": [
+        [
+          { "node": "🧮 Assemble Per-Ticker Metrics", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🧮 Assemble Per-Ticker Metrics": {
+      "main": [
+        [
+          { "node": "🧠 Predict via FastAPI", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🧠 Predict via FastAPI": {
+      "main": [
+        [
+          { "node": "🔗 Join Metrics + Predictions", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🔗 Join Metrics + Predictions": {
+      "main": [
+        [
+          { "node": "🧾 Craft GPT Prompt (Locked Format)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🧾 Craft GPT Prompt (Locked Format)": {
+      "main": [
+        [
+          { "node": "🤖 OpenAI Chat (gpt-5-mini)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🤖 OpenAI Chat (gpt-5-mini)": {
+      "main": [
+        [
+          { "node": "📝 Extract Report Text", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "📝 Extract Report Text": {
+      "main": [
+        [
+          { "node": "📧 Send Email", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": { "timezone": "Asia/Dubai" },
+  "active": true
+}
