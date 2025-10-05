@@ -1,7 +1,21 @@
 // lib/storage.ts
 import localforage from "localforage";
 
-/** Small ID helper: uses crypto.randomUUID() when available */
+/** ---- Local day helpers (fixes UTC day-boundary bugs) ---- */
+const ymdLocal = (d?: Date) => {
+  const dt = d ?? new Date();
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, "0");
+  const day = String(dt.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+const dayOf = (iso?: string, explicit?: string) =>
+  explicit || (iso ? ymdLocal(new Date(iso)) : ymdLocal());
+
+/** Exported “today” is now LOCAL (not UTC) */
+export const todayKey = (): string => ymdLocal();
+
+/** Small ID helper */
 const newId = (): string => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     // @ts-ignore
@@ -17,14 +31,16 @@ export type DepositType = "success" | "progress" | "effort";
 
 export type Deposit = {
   id: string;
-  date: string; // ISO
+  date: string;      // ISO timestamp
+  day?: string;      // NEW: local YYYY-MM-DD (used for scoring)
   type: DepositType;
   text: string;
 };
 
 export type Reframe = {
   id: string;
-  date: string; // ISO
+  date: string;      // ISO
+  day?: string;      // NEW local day
   original: string;
   reframed: string;
 };
@@ -42,7 +58,8 @@ export type RoutineKey =
 
 export type RoutineCheck = {
   id: string;
-  date: string;
+  date: string;      // ISO
+  day?: string;      // NEW local day
   routine: RoutineKey;
   done: boolean;
 };
@@ -66,25 +83,23 @@ export type Project = {
   post: {
     aar: { what: string; soWhat: string; nowWhat: string };
     esp: { e: string; s: string; p: string };
-    confidence: number; // 0..100
+    confidence: number;
   };
 };
 
-/** Coach digest (structured) */
 export type CoachDigest = {
   totals: { success: number; progress: number; effort: number; reframes: number };
   recent: {
     deposits: Array<{ type: DepositType; text: string; date: string }>;
     reframes: Array<{ original: string; reframed: string; date: string }>;
   };
-  summary: string; // compact human-readable line
+  summary: string;
 };
 
-/** Settings: which questions are enabled for scoring */
 export type UserSettings = {
-  activeRoutines: RoutineKey[];   // routines that count as daily “questions”
-  includeDepositChecks: boolean;  // S/P/E are questions
-  includeReframeCheck: boolean;   // Reframe is a question
+  activeRoutines: RoutineKey[];
+  includeDepositChecks: boolean;
+  includeReframeCheck: boolean;
 };
 
 /** ********************
@@ -99,16 +114,15 @@ const settingsStore  = localforage.createInstance({ name: "cmc", storeName: "set
 /** ********************
  * Utilities
  ********************* */
-export const todayKey = (): string => new Date().toISOString().slice(0, 10);
 const inLastDays = (iso: string, days = 7) =>
   Date.now() - new Date(iso).getTime() < days * 24 * 60 * 60 * 1000;
 
 /** ********************
- * Settings (merge defaults into stored values)
+ * Settings
  ********************* */
-export async function getSettings() {
-  const defaults = {
-    activeRoutines: ["affirmations", "nightcap", "openDoorway"] as RoutineKey[],
+export async function getSettings(): Promise<UserSettings> {
+  const defaults: UserSettings = {
+    activeRoutines: ["affirmations", "nightcap", "openDoorway"],
     includeDepositChecks: true,
     includeReframeCheck: true,
   };
@@ -116,9 +130,15 @@ export async function getSettings() {
   const merged: UserSettings = {
     ...defaults,
     ...(stored || {}),
-    activeRoutines: Array.isArray(stored?.activeRoutines) ? stored!.activeRoutines : defaults.activeRoutines,
+    activeRoutines: Array.isArray(stored?.activeRoutines)
+      ? stored!.activeRoutines
+      : defaults.activeRoutines,
   };
-  if (!stored || stored.includeDepositChecks === undefined || stored.includeReframeCheck === undefined) {
+  if (
+    !stored ||
+    stored.includeDepositChecks === undefined ||
+    stored.includeReframeCheck === undefined
+  ) {
     await settingsStore.setItem("user", merged);
   }
   return merged;
@@ -132,7 +152,12 @@ export async function saveSettings(patch: Partial<UserSettings>) {
  * RESET (for testing)
  ********************* */
 export async function resetAllData() {
-  await Promise.all([depositsStore.clear(), reframesStore.clear(), routinesStore.clear(), projectsStore.clear()]);
+  await Promise.all([
+    depositsStore.clear(),
+    reframesStore.clear(),
+    routinesStore.clear(),
+    projectsStore.clear(),
+  ]);
   await settingsStore.removeItem("user");
 }
 
@@ -144,11 +169,27 @@ export async function addDeposit(
   text?: string,
   date = new Date().toISOString()
 ): Promise<Deposit> {
-  let type: DepositType, finalText: string, finalDate = date;
-  if (typeof typeOrObj === "object") { type = typeOrObj.type; finalText = typeOrObj.text; finalDate = typeOrObj.date ?? new Date().toISOString(); }
-  else { type = typeOrObj; finalText = text ?? ""; }
+  let type: DepositType;
+  let finalText: string;
+  let finalDate = date;
+
+  if (typeof typeOrObj === "object") {
+    type = typeOrObj.type;
+    finalText = typeOrObj.text;
+    finalDate = typeOrObj.date ?? new Date().toISOString();
+  } else {
+    type = typeOrObj;
+    finalText = text ?? "";
+  }
+
   const id = newId();
-  const d: Deposit = { id, date: finalDate, type, text: finalText };
+  const d: Deposit = {
+    id,
+    date: finalDate,
+    day: dayOf(finalDate),
+    type,
+    text: finalText,
+  };
   await depositsStore.setItem(id, d);
   return d;
 }
@@ -163,7 +204,7 @@ export const allDeposits = () => listDeposits();
 export async function hasDepositTypeToday(type: DepositType) {
   const today = todayKey();
   const list = await listDeposits();
-  return list.some((d) => d.type === type && d.date.slice(0, 10) === today);
+  return list.some((d) => (d.day || dayOf(d.date)) === today && d.type === type);
 }
 export async function logDepositIfNeeded(type: DepositType, text: string) {
   const already = await hasDepositTypeToday(type);
@@ -179,11 +220,27 @@ export async function addReframe(
   reframed?: string,
   date = new Date().toISOString()
 ): Promise<Reframe> {
-  let original: string, finalReframed: string, finalDate = date;
-  if (typeof originalOrObj === "object") { original = originalOrObj.original; finalReframed = originalOrObj.reframed; finalDate = originalOrObj.date ?? new Date().toISOString(); }
-  else { original = originalOrObj; finalReframed = reframed ?? ""; }
+  let original: string;
+  let finalReframed: string;
+  let finalDate = date;
+
+  if (typeof originalOrObj === "object") {
+    original = originalOrObj.original;
+    finalReframed = originalOrObj.reframed;
+    finalDate = originalOrObj.date ?? new Date().toISOString();
+  } else {
+    original = originalOrObj;
+    finalReframed = reframed ?? "";
+  }
+
   const id = newId();
-  const r: Reframe = { id, date: finalDate, original, reframed: finalReframed };
+  const r: Reframe = {
+    id,
+    date: finalDate,
+    day: dayOf(finalDate),
+    original,
+    reframed: finalReframed,
+  };
   await reframesStore.setItem(id, r);
   return r;
 }
@@ -197,38 +254,58 @@ export const allReframes = () => listReframes();
 /** ********************
  * Routines
  ********************* */
-export async function markRoutineDone(routine: RoutineKey, date = new Date().toISOString()) {
-  const id = newId(); const rec: RoutineCheck = { id, date, routine, done: true };
-  await routinesStore.setItem(id, rec); return rec;
+export async function markRoutineDone(
+  routine: RoutineKey,
+  date = new Date().toISOString()
+): Promise<RoutineCheck> {
+  const id = newId();
+  const rec: RoutineCheck = {
+    id,
+    date,
+    day: dayOf(date),
+    routine,
+    done: true,
+  };
+  await routinesStore.setItem(id, rec);
+  return rec;
 }
 export const markRoutine = (routine: RoutineKey, dateOrFlag?: string | boolean) =>
-  markRoutineDone(routine, typeof dateOrFlag === "string" ? dateOrFlag : undefined);
-export async function listRoutineChecks() {
+  markRoutineDone(routine, typeof dateOrFlag === "string" ? dateOrFlag : new Date().toISOString());
+export async function listRoutineChecks(): Promise<RoutineCheck[]> {
   const arr: RoutineCheck[] = [];
   await routinesStore.iterate<RoutineCheck, void>((v) => arr.push(v));
   return arr.sort((a, b) => b.date.localeCompare(a.date));
 }
 
 /** ********************
- * Scoring helpers
+ * Scoring helpers (use LOCAL day strictly)
  ********************* */
 export async function answeredMapForDay(localDay: string) {
   const settings = await getSettings();
   const deposits = await listDeposits();
   const reframes = await listReframes();
   const routines = await listRoutineChecks();
-  const dayMatch = (iso: string) => iso.slice(0, 10) === localDay;
+
+  const depMatch = (d: Deposit) => (d.day || dayOf(d.date)) === localDay;
+  const refMatch = (r: Reframe) => (r.day || dayOf(r.date)) === localDay;
+  const rouMatch = (r: RoutineCheck) => (r.day || dayOf(r.date)) === localDay;
 
   const m: Record<string, boolean> = {};
+
   if (settings.includeDepositChecks) {
-    m["q:successLogged"]  = deposits.some((d) => d.type === "success"  && dayMatch(d.date));
-    m["q:progressLogged"] = deposits.some((d) => d.type === "progress" && dayMatch(d.date));
-    m["q:effortLogged"]   = deposits.some((d) => d.type === "effort"   && dayMatch(d.date));
+    m["q:successLogged"]  = deposits.some((d) => d.type === "success"  && depMatch(d));
+    m["q:progressLogged"] = deposits.some((d) => d.type === "progress" && depMatch(d));
+    m["q:effortLogged"]   = deposits.some((d) => d.type === "effort"   && depMatch(d));
   }
-  if (settings.includeReframeCheck) m["q:reframeLogged"] = reframes.some((r) => dayMatch(r.date));
-  for (const r of settings.activeRoutines) m[`q:${r}`] = routines.some((x) => x.routine === r && x.done && dayMatch(x.date));
+  if (settings.includeReframeCheck) {
+    m["q:reframeLogged"] = reframes.some((r) => refMatch(r));
+  }
+  for (const r of settings.activeRoutines) {
+    m[`q:${r}`] = routines.some((x) => x.routine === r && x.done && rouMatch(x));
+  }
   return m;
 }
+
 export async function dayCounts(localDay: string) {
   const map = await answeredMapForDay(localDay);
   const keys = Object.keys(map);
@@ -237,10 +314,17 @@ export async function dayCounts(localDay: string) {
   return { eligible, answered, keys, map };
 }
 
-/** 7-day series with inactivity rule */
-export async function weeklyPointsSeriesWithDeductions() {
+/** 7-day series with inactivity rule (LOCAL days) */
+export async function weeklyPointsSeriesWithDeductions(): Promise<
+  { date: string; deposits: number; withdrawals: number; total: number; answered: number; eligible: number }[]
+> {
   const days: string[] = [];
-  for (let i = 6; i >= 0; i--) days.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    days.push(ymdLocal(d));
+  }
+
   const raw: { date: string; eligible: number; answered: number; deposits: number; withdrawals: number }[] = [];
   for (const day of days) {
     const { eligible, answered } = await dayCounts(day);
@@ -248,14 +332,20 @@ export async function weeklyPointsSeriesWithDeductions() {
     let withdrawals = Math.max(0, (eligible - answered) * 10);
     raw.push({ date: day, eligible, answered, deposits, withdrawals });
   }
-  // inactivity rule
+
+  // apply inactivity rule: stop deducting on 3rd consecutive zero-answered day
   let zeroStreak = 0;
   for (let i = 0; i < raw.length; i++) {
-    if (raw[i].answered === 0) { zeroStreak++; if (zeroStreak >= 3) raw[i].withdrawals = 0; }
-    else zeroStreak = 0;
+    if (raw[i].answered === 0) {
+      zeroStreak++;
+      if (zeroStreak >= 3) raw[i].withdrawals = 0;
+    } else {
+      zeroStreak = 0;
+    }
   }
   return raw.map((x) => ({ ...x, total: x.deposits - x.withdrawals }));
 }
+
 export async function todayPoints() {
   const today = todayKey();
   const series = await weeklyPointsSeriesWithDeductions();
@@ -265,46 +355,86 @@ export async function todayPoints() {
 export async function todayChecklist() { return dayCounts(todayKey()); }
 
 /** ********************
- * Coach digest (unchanged)
+ * Coach digest (unchanged logic, still time-based)
  ********************* */
 export async function digestForCoach() {
   const deposits = await listDeposits();
   const reframes = await listReframes();
+
   const deps7 = deposits.filter((d) => inLastDays(d.date, 7));
   const refs7 = reframes.filter((r) => inLastDays(r.date, 7));
+
   const totals = {
     success: deps7.filter((d) => d.type === "success").length,
     progress: deps7.filter((d) => d.type === "progress").length,
     effort: deps7.filter((d) => d.type === "effort").length,
     reframes: refs7.length,
   };
+
   const recentDeposits = deps7.slice(0, 3).map((d) => ({ type: d.type, text: d.text, date: d.date }));
   const recentReframes = refs7.slice(0, 3).map((r) => ({ original: r.original, reframed: r.reframed, date: r.date }));
+
   const summary = `Last 7d — success:${totals.success}, progress:${totals.progress}, effort:${totals.effort}, reframes:${totals.reframes}`;
+
   return { totals, recent: { deposits: recentDeposits, reframes: recentReframes }, summary };
 }
-export async function digestForCoachText() { const d = await digestForCoach(); return d.summary; }
+export async function digestForCoachText() {
+  const d = await digestForCoach();
+  return d.summary;
+}
 
 /** ********************
- * Projects
+ * Projects (unchanged)
  ********************* */
 export async function createProject(input: string | Partial<Project>): Promise<Project> {
-  const id = newId(), now = new Date().toISOString();
+  const id = newId();
+  const now = new Date().toISOString();
+
   const base: Project = {
-    id, title: "Untitled Project", date: now,
+    id,
+    title: "Untitled Project",
+    date: now,
     pre: { vaultNotes: [], affirmations: [], arena: { what: "", who: "", where: "" }, flatTires: [], visualizationNotes: "" },
     during: { cbaUses: 0, shooter: false, lastWordNotes: [] },
     post: { aar: { what: "", soWhat: "", nowWhat: "" }, esp: { e: "", s: "", p: "" }, confidence: 0 },
   };
-  const merged: Project = typeof input === "string"
-    ? { ...base, title: input }
-    : { ...base, title: input.title ?? base.title, pre: { ...base.pre, ...(input.pre || {}) }, during: { ...base.during, ...(input.during || {}) }, post: { ...base.post, ...(input.post || {}) } };
-  await projectsStore.setItem(id, merged); return merged;
+
+  let merged: Project;
+  if (typeof input === "string") {
+    merged = { ...base, title: input };
+  } else {
+    merged = {
+      ...base,
+      title: input.title ?? base.title,
+      pre: { ...base.pre, ...(input.pre || {}) },
+      during: { ...base.during, ...(input.during || {}) },
+      post: { ...base.post, ...(input.post || {}) },
+    };
+  }
+
+  await projectsStore.setItem(id, merged);
+  return merged;
 }
-export async function listProjects() { const arr: Project[] = []; await projectsStore.iterate<Project, void>((v) => arr.push(v)); return arr.sort((a, b) => (b.date || "").localeCompare(a.date || "")); }
-export async function getProject(id: string) { const p = await projectsStore.getItem<Project>(id); return p ?? null; }
-export async function updateProject(id: string, patch: Partial<Project>) {
-  const existing = await projectsStore.getItem<Project>(id); if (!existing) return null;
-  const merged: Project = { ...existing, ...patch, pre: { ...existing.pre, ...(patch.pre || {}) }, during: { ...existing.during, ...(patch.during || {}) }, post: { ...existing.post, ...(patch.post || {}) } };
-  await projectsStore.setItem(id, merged); return merged;
+
+export async function listProjects(): Promise<Project[]> {
+  const arr: Project[] = [];
+  await projectsStore.iterate<Project, void>((v) => arr.push(v));
+  return arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+}
+export async function getProject(id: string): Promise<Project | null> {
+  const p = await projectsStore.getItem<Project>(id);
+  return p ?? null;
+}
+export async function updateProject(id: string, patch: Partial<Project>): Promise<Project | null> {
+  const existing = await projectsStore.getItem<Project>(id);
+  if (!existing) return null;
+  const merged: Project = {
+    ...existing,
+    ...patch,
+    pre: { ...existing.pre, ...(patch.pre || {}) },
+    during: { ...existing.during, ...(patch.during || {}) },
+    post: { ...existing.post, ...(patch.post || {}) },
+  };
+  await projectsStore.setItem(id, merged);
+  return merged;
 }
