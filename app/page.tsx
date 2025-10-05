@@ -23,12 +23,12 @@ export default function DashboardPage() {
   const [series, setSeries] = useState<SeriesPoint[]>([])
   const [today, setToday] = useState({ deposits: 0, withdrawals: 0, total: 0 })
 
-  // Separate notes for each daily question
+  // separate notes for each question
   const [successNote, setSuccessNote] = useState('')
   const [progressNote, setProgressNote] = useState('')
   const [effortNote, setEffortNote] = useState('')
 
-  // Reframe inputs
+  // reframe inputs
   const [origText, setOrigText] = useState('')
   const [refrText, setRefrText] = useState('')
 
@@ -56,12 +56,12 @@ export default function DashboardPage() {
   }
   useEffect(() => { refresh() }, [])
 
-  // Which deposit questions already counted today?
+  // which questions already counted today?
   const successDone  = !!checklist?.map?.['q:successLogged']
   const progressDone = !!checklist?.map?.['q:progressLogged']
   const effortDone   = !!checklist?.map?.['q:effortLogged']
 
-  // Handlers — each logs its own type (+10 once per day)
+  // handlers — each logs its own type (+10 once per day)
   async function saveSuccess() {
     await logDepositIfNeeded('success', successNote.trim() || 'Logged success')
     setSuccessNote('')
@@ -176,7 +176,7 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* DAILY DEPOSIT QUESTIONS — split into 3 separate inputs */}
+      {/* DAILY DEPOSIT QUESTIONS — three separate inputs */}
       <section className="rounded-2xl border bg-white p-4 space-y-4">
         <h3 className="font-semibold">Daily Deposits (+10 each, once per day)</h3>
 
