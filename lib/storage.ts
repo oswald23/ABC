@@ -104,29 +104,44 @@ const inLastDays = (iso: string, days = 7) =>
   Date.now() - new Date(iso).getTime() < days * 24 * 60 * 60 * 1000;
 
 /** ********************
- * Settings
+ * Settings (now merges defaults with stored values)
  ********************* */
 export async function getSettings(): Promise<UserSettings> {
-  const s = await settingsStore.getItem<UserSettings>("user");
-  return (
-    s ?? {
-      activeRoutines: ["affirmations", "nightcap", "openDoorway"], // gentle default
-      includeDepositChecks: true,
-      includeReframeCheck: true,
-    }
-  );
+  const defaults: UserSettings = {
+    activeRoutines: ["affirmations", "nightcap", "openDoorway"],
+    includeDepositChecks: true,
+    includeReframeCheck: true,
+  };
+  const stored = await settingsStore.getItem<UserSettings>("user");
+
+  // Merge shallowly and normalize activeRoutines
+  const merged: UserSettings = {
+    ...defaults,
+    ...(stored || {}),
+    activeRoutines: Array.isArray(stored?.activeRoutines)
+      ? stored!.activeRoutines
+      : defaults.activeRoutines,
+  };
+
+  // If stored settings were missing new fields, persist the upgraded object
+  if (
+    !stored ||
+    stored.includeDepositChecks === undefined ||
+    stored.includeReframeCheck === undefined
+  ) {
+    await settingsStore.setItem("user", merged);
+  }
+  return merged;
 }
+
 export async function saveSettings(patch: Partial<UserSettings>) {
   const cur = await getSettings();
-  await settingsStore.setItem("user", { ...cur, ...patch });
+  const next = { ...cur, ...patch };
+  await settingsStore.setItem("user", next);
 }
 
 /** ********************
- * Deposits
- * Accepts either:
- *   addDeposit('success', 'Did X', '2025-10-03T...')
- * or
- *   addDeposit({ type:'success', text:'Did X', date?:string })
+ * Deposits (flexible signature)
  ********************* */
 export async function addDeposit(
   typeOrObj: DepositType | { type: DepositType; text: string; date?: string },
@@ -160,11 +175,7 @@ export async function listDeposits(): Promise<Deposit[]> {
 export const allDeposits = () => listDeposits();
 
 /** ********************
- * Reframes
- * Accepts either:
- *   addReframe("orig", "reframed", '2025-10-03T...')
- * or
- *   addReframe({ original:"orig", reframed:"reframed", date?:string })
+ * Reframes (flexible signature)
  ********************* */
 export async function addReframe(
   originalOrObj:
@@ -235,12 +246,12 @@ export async function answeredMapForDay(localDay: string) {
   const m: Record<string, boolean> = {};
 
   if (settings.includeDepositChecks) {
-    m["q:successLogged"] = deposits.some((d) => d.type === "success" && dayMatch(d.date));
+    m["q:successLogged"]  = deposits.some((d) => d.type === "success"  && dayMatch(d.date));
     m["q:progressLogged"] = deposits.some((d) => d.type === "progress" && dayMatch(d.date));
-    m["q:effortLogged"] = deposits.some((d) => d.type === "effort" && dayMatch(d.date));
+    m["q:effortLogged"]   = deposits.some((d) => d.type === "effort"   && dayMatch(d.date));
   }
   if (settings.includeReframeCheck) {
-    m["q:reframeLogged"] = reframes.some((r) => dayMatch(r.date));
+    m["q:reframeLogged"]  = reframes.some((r) => dayMatch(r.date));
   }
   for (const r of settings.activeRoutines) {
     m[`q:${r}`] = routines.some((x) => x.routine === r && x.done && dayMatch(x.date));
@@ -310,7 +321,7 @@ export async function weeklyPointsTotals() {
 }
 
 /** ********************
- * Coach digest (unchanged from earlier)
+ * Coach digest (unchanged)
  ********************* */
 export async function digestForCoach(): Promise<CoachDigest> {
   const deposits = await listDeposits();
@@ -339,7 +350,7 @@ export async function digestForCoachText(): Promise<string> {
 }
 
 /** ********************
- * Projects (unchanged APIs; flexible createProject)
+ * Projects (flexible createProject)
  ********************* */
 export async function createProject(input: string | Partial<Project>): Promise<Project> {
   const id = newId();
