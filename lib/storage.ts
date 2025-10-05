@@ -1,7 +1,7 @@
 // lib/storage.ts
 import localforage from "localforage";
 
-/** ---- Local day helpers (fixes UTC day-boundary bugs) ---- */
+/* ---------------- Local-day helpers (avoid UTC boundary bugs) ---------------- */
 const ymdLocal = (d?: Date) => {
   const dt = d ?? new Date();
   const y = dt.getFullYear();
@@ -9,13 +9,10 @@ const ymdLocal = (d?: Date) => {
   const day = String(dt.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 };
-const dayOf = (iso?: string, explicit?: string) =>
-  explicit || (iso ? ymdLocal(new Date(iso)) : ymdLocal());
-
-/** Exported “today” is now LOCAL (not UTC) */
 export const todayKey = (): string => ymdLocal();
+const localDayOfISO = (iso: string) => ymdLocal(new Date(iso));
 
-/** Small ID helper */
+/* ---------------- IDs ---------------- */
 const newId = (): string => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     // @ts-ignore
@@ -24,23 +21,21 @@ const newId = (): string => {
   return Math.random().toString(36).slice(2) + "-" + Date.now().toString(36);
 };
 
-/** ********************
- * Types
- ********************* */
+/* ---------------- Types ---------------- */
 export type DepositType = "success" | "progress" | "effort";
 
 export type Deposit = {
   id: string;
-  date: string;      // ISO timestamp
-  day?: string;      // NEW: local YYYY-MM-DD (used for scoring)
+  date: string; // ISO timestamp
+  day?: string; // local YYYY-MM-DD (added for robustness)
   type: DepositType;
   text: string;
 };
 
 export type Reframe = {
   id: string;
-  date: string;      // ISO
-  day?: string;      // NEW local day
+  date: string;
+  day?: string;
   original: string;
   reframed: string;
 };
@@ -58,8 +53,8 @@ export type RoutineKey =
 
 export type RoutineCheck = {
   id: string;
-  date: string;      // ISO
-  day?: string;      // NEW local day
+  date: string;
+  day?: string;
   routine: RoutineKey;
   done: boolean;
 };
@@ -67,7 +62,7 @@ export type RoutineCheck = {
 export type Project = {
   id: string;
   title: string;
-  date?: string; // created at
+  date?: string;
   pre: {
     vaultNotes: string[];
     affirmations: string[];
@@ -102,24 +97,24 @@ export type UserSettings = {
   includeReframeCheck: boolean;
 };
 
-/** ********************
- * LocalForage stores
- ********************* */
+/* ---------------- NEW: Daily checklist flags ---------------- */
+type DailyFlags = {
+  success?: boolean;
+  progress?: boolean;
+  effort?: boolean;
+  reframe?: boolean;
+  routines?: Partial<Record<RoutineKey, boolean>>;
+};
+
+/* ---------------- Stores ---------------- */
 const depositsStore = localforage.createInstance({ name: "cmc", storeName: "deposits" });
 const reframesStore  = localforage.createInstance({ name: "cmc", storeName: "reframes" });
 const routinesStore  = localforage.createInstance({ name: "cmc", storeName: "routines" });
 const projectsStore  = localforage.createInstance({ name: "cmc", storeName: "projects" });
 const settingsStore  = localforage.createInstance({ name: "cmc", storeName: "settings" });
+const dailyStore     = localforage.createInstance({ name: "cmc", storeName: "daily" });
 
-/** ********************
- * Utilities
- ********************* */
-const inLastDays = (iso: string, days = 7) =>
-  Date.now() - new Date(iso).getTime() < days * 24 * 60 * 60 * 1000;
-
-/** ********************
- * Settings
- ********************* */
+/* ---------------- Settings ---------------- */
 export async function getSettings(): Promise<UserSettings> {
   const defaults: UserSettings = {
     activeRoutines: ["affirmations", "nightcap", "openDoorway"],
@@ -148,22 +143,31 @@ export async function saveSettings(patch: Partial<UserSettings>) {
   await settingsStore.setItem("user", { ...cur, ...patch });
 }
 
-/** ********************
- * RESET (for testing)
- ********************* */
+/* ---------------- Daily helpers ---------------- */
+async function getDaily(day: string): Promise<DailyFlags> {
+  return (await dailyStore.getItem<DailyFlags>(day)) || {};
+}
+async function setDaily(day: string, flags: DailyFlags) {
+  await dailyStore.setItem(day, flags);
+}
+async function patchDaily(day: string, patch: Partial<DailyFlags>) {
+  const cur = await getDaily(day);
+  await setDaily(day, { ...cur, ...patch, routines: { ...(cur.routines || {}), ...(patch.routines || {}) } });
+}
+
+/* ---------------- Reset (for testing) ---------------- */
 export async function resetAllData() {
   await Promise.all([
     depositsStore.clear(),
     reframesStore.clear(),
     routinesStore.clear(),
     projectsStore.clear(),
+    dailyStore.clear(),
   ]);
   await settingsStore.removeItem("user");
 }
 
-/** ********************
- * Deposits
- ********************* */
+/* ---------------- Deposits ---------------- */
 export async function addDeposit(
   typeOrObj: DepositType | { type: DepositType; text: string; date?: string },
   text?: string,
@@ -186,7 +190,7 @@ export async function addDeposit(
   const d: Deposit = {
     id,
     date: finalDate,
-    day: dayOf(finalDate),
+    day: localDayOfISO(finalDate),
     type,
     text: finalText,
   };
@@ -200,21 +204,17 @@ export async function listDeposits(): Promise<Deposit[]> {
 }
 export const allDeposits = () => listDeposits();
 
-/** Count-once helpers */
-export async function hasDepositTypeToday(type: DepositType) {
-  const today = todayKey();
-  const list = await listDeposits();
-  return list.some((d) => (d.day || dayOf(d.date)) === today && d.type === type);
-}
+/** Count-once via daily flags (authoritative) */
 export async function logDepositIfNeeded(type: DepositType, text: string) {
-  const already = await hasDepositTypeToday(type);
   const created = await addDeposit({ type, text });
-  return { created, counted: !already };
+  const day = created.day || localDayOfISO(created.date);
+  const cur = await getDaily(day);
+  const counted = !cur[type];
+  if (counted) await patchDaily(day, { [type]: true } as any);
+  return { created, counted };
 }
 
-/** ********************
- * Reframes
- ********************* */
+/* ---------------- Reframes ---------------- */
 export async function addReframe(
   originalOrObj: string | { original: string; reframed: string; date?: string },
   reframed?: string,
@@ -237,11 +237,16 @@ export async function addReframe(
   const r: Reframe = {
     id,
     date: finalDate,
-    day: dayOf(finalDate),
+    day: localDayOfISO(finalDate),
     original,
     reframed: finalReframed,
   };
   await reframesStore.setItem(id, r);
+
+  // flip daily flag
+  const day = r.day || localDayOfISO(r.date);
+  await patchDaily(day, { reframe: true });
+
   return r;
 }
 export async function listReframes(): Promise<Reframe[]> {
@@ -251,9 +256,7 @@ export async function listReframes(): Promise<Reframe[]> {
 }
 export const allReframes = () => listReframes();
 
-/** ********************
- * Routines
- ********************* */
+/* ---------------- Routines ---------------- */
 export async function markRoutineDone(
   routine: RoutineKey,
   date = new Date().toISOString()
@@ -262,11 +265,16 @@ export async function markRoutineDone(
   const rec: RoutineCheck = {
     id,
     date,
-    day: dayOf(date),
+    day: localDayOfISO(date),
     routine,
     done: true,
   };
   await routinesStore.setItem(id, rec);
+
+  const day = rec.day || localDayOfISO(rec.date);
+  const cur = await getDaily(day);
+  await patchDaily(day, { routines: { ...(cur.routines || {}), [routine]: true } });
+
   return rec;
 }
 export const markRoutine = (routine: RoutineKey, dateOrFlag?: string | boolean) =>
@@ -277,32 +285,36 @@ export async function listRoutineChecks(): Promise<RoutineCheck[]> {
   return arr.sort((a, b) => b.date.localeCompare(a.date));
 }
 
-/** ********************
- * Scoring helpers (use LOCAL day strictly)
- ********************* */
+/* ---------------- Scoring (uses daily flags first) ---------------- */
 export async function answeredMapForDay(localDay: string) {
   const settings = await getSettings();
+
+  // Authoritative flags
+  const flags = await getDaily(localDay);
+
+  // Fallbacks (for legacy entries before flags existed)
   const deposits = await listDeposits();
   const reframes = await listReframes();
   const routines = await listRoutineChecks();
-
-  const depMatch = (d: Deposit) => (d.day || dayOf(d.date)) === localDay;
-  const refMatch = (r: Reframe) => (r.day || dayOf(r.date)) === localDay;
-  const rouMatch = (r: RoutineCheck) => (r.day || dayOf(r.date)) === localDay;
+  const depMatch = (d: Deposit) => (d.day || localDayOfISO(d.date)) === localDay;
+  const refMatch = (r: Reframe) => (r.day || localDayOfISO(r.date)) === localDay;
+  const rouMatch = (r: RoutineCheck) => (r.day || localDayOfISO(r.date)) === localDay;
 
   const m: Record<string, boolean> = {};
 
   if (settings.includeDepositChecks) {
-    m["q:successLogged"]  = deposits.some((d) => d.type === "success"  && depMatch(d));
-    m["q:progressLogged"] = deposits.some((d) => d.type === "progress" && depMatch(d));
-    m["q:effortLogged"]   = deposits.some((d) => d.type === "effort"   && depMatch(d));
+    m["q:successLogged"]  = !!flags.success  || deposits.some(d => d.type === "success"  && depMatch(d));
+    m["q:progressLogged"] = !!flags.progress || deposits.some(d => d.type === "progress" && depMatch(d));
+    m["q:effortLogged"]   = !!flags.effort   || deposits.some(d => d.type === "effort"   && depMatch(d));
   }
   if (settings.includeReframeCheck) {
-    m["q:reframeLogged"] = reframes.some((r) => refMatch(r));
+    m["q:reframeLogged"]  = !!flags.reframe  || reframes.some(r => refMatch(r));
   }
   for (const r of settings.activeRoutines) {
-    m[`q:${r}`] = routines.some((x) => x.routine === r && x.done && rouMatch(x));
+    const routineOk = !!flags.routines?.[r] || routines.some(x => x.routine === r && x.done && rouMatch(x));
+    m[`q:${r}`] = routineOk;
   }
+
   return m;
 }
 
@@ -310,18 +322,17 @@ export async function dayCounts(localDay: string) {
   const map = await answeredMapForDay(localDay);
   const keys = Object.keys(map);
   const eligible = keys.length;
-  const answered = keys.filter((k) => map[k]).length;
+  const answered = keys.filter(k => map[k]).length;
   return { eligible, answered, keys, map };
 }
 
-/** 7-day series with inactivity rule (LOCAL days) */
+/* 7-day series with inactivity rule (local days) */
 export async function weeklyPointsSeriesWithDeductions(): Promise<
   { date: string; deposits: number; withdrawals: number; total: number; answered: number; eligible: number }[]
 > {
   const days: string[] = [];
   for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
+    const d = new Date(); d.setDate(d.getDate() - i);
     days.push(ymdLocal(d));
   }
 
@@ -333,7 +344,7 @@ export async function weeklyPointsSeriesWithDeductions(): Promise<
     raw.push({ date: day, eligible, answered, deposits, withdrawals });
   }
 
-  // apply inactivity rule: stop deducting on 3rd consecutive zero-answered day
+  // Inactivity rule: stop deducting on the 3rd consecutive zero-answered day
   let zeroStreak = 0;
   for (let i = 0; i < raw.length; i++) {
     if (raw[i].answered === 0) {
@@ -343,49 +354,48 @@ export async function weeklyPointsSeriesWithDeductions(): Promise<
       zeroStreak = 0;
     }
   }
-  return raw.map((x) => ({ ...x, total: x.deposits - x.withdrawals }));
+
+  return raw.map(x => ({ ...x, total: x.deposits - x.withdrawals }));
 }
 
 export async function todayPoints() {
-  const today = todayKey();
+  const day = todayKey();
   const series = await weeklyPointsSeriesWithDeductions();
-  const rec = series.find((s) => s.date === today);
-  return rec ?? { date: today, deposits: 0, withdrawals: 0, total: 0, answered: 0, eligible: 0 };
+  const rec = series.find(s => s.date === day);
+  return rec ?? { date: day, deposits: 0, withdrawals: 0, total: 0, answered: 0, eligible: 0 };
 }
-export async function todayChecklist() { return dayCounts(todayKey()); }
 
-/** ********************
- * Coach digest (unchanged logic, still time-based)
- ********************* */
-export async function digestForCoach() {
+/* ---------------- Coach digest (unchanged) ---------------- */
+const inLastDays = (iso: string, days = 7) =>
+  Date.now() - new Date(iso).getTime() < days * 86400000;
+
+export async function digestForCoach(): Promise<CoachDigest> {
   const deposits = await listDeposits();
   const reframes = await listReframes();
 
-  const deps7 = deposits.filter((d) => inLastDays(d.date, 7));
-  const refs7 = reframes.filter((r) => inLastDays(r.date, 7));
+  const deps7 = deposits.filter(d => inLastDays(d.date, 7));
+  const refs7 = reframes.filter(r => inLastDays(r.date, 7));
 
   const totals = {
-    success: deps7.filter((d) => d.type === "success").length,
-    progress: deps7.filter((d) => d.type === "progress").length,
-    effort: deps7.filter((d) => d.type === "effort").length,
+    success: deps7.filter(d => d.type === "success").length,
+    progress: deps7.filter(d => d.type === "progress").length,
+    effort:   deps7.filter(d => d.type === "effort").length,
     reframes: refs7.length,
   };
 
-  const recentDeposits = deps7.slice(0, 3).map((d) => ({ type: d.type, text: d.text, date: d.date }));
-  const recentReframes = refs7.slice(0, 3).map((r) => ({ original: r.original, reframed: r.reframed, date: r.date }));
+  const recentDeposits = deps7.slice(0, 3).map(d => ({ type: d.type, text: d.text, date: d.date }));
+  const recentReframes = refs7.slice(0, 3).map(r => ({ original: r.original, reframed: r.reframed, date: r.date }));
 
   const summary = `Last 7d — success:${totals.success}, progress:${totals.progress}, effort:${totals.effort}, reframes:${totals.reframes}`;
 
   return { totals, recent: { deposits: recentDeposits, reframes: recentReframes }, summary };
 }
-export async function digestForCoachText() {
+export async function digestForCoachText(): Promise<string> {
   const d = await digestForCoach();
   return d.summary;
 }
 
-/** ********************
- * Projects (unchanged)
- ********************* */
+/* ---------------- Projects (unchanged) ---------------- */
 export async function createProject(input: string | Partial<Project>): Promise<Project> {
   const id = newId();
   const now = new Date().toISOString();
@@ -399,23 +409,19 @@ export async function createProject(input: string | Partial<Project>): Promise<P
     post: { aar: { what: "", soWhat: "", nowWhat: "" }, esp: { e: "", s: "", p: "" }, confidence: 0 },
   };
 
-  let merged: Project;
-  if (typeof input === "string") {
-    merged = { ...base, title: input };
-  } else {
-    merged = {
-      ...base,
-      title: input.title ?? base.title,
-      pre: { ...base.pre, ...(input.pre || {}) },
-      during: { ...base.during, ...(input.during || {}) },
-      post: { ...base.post, ...(input.post || {}) },
-    };
-  }
+  const merged: Project = typeof input === "string"
+    ? { ...base, title: input }
+    : {
+        ...base,
+        title: input.title ?? base.title,
+        pre:    { ...base.pre,    ...(input.pre    || {}) },
+        during: { ...base.during, ...(input.during || {}) },
+        post:   { ...base.post,   ...(input.post   || {}) },
+      };
 
   await projectsStore.setItem(id, merged);
   return merged;
 }
-
 export async function listProjects(): Promise<Project[]> {
   const arr: Project[] = [];
   await projectsStore.iterate<Project, void>((v) => arr.push(v));
@@ -431,9 +437,9 @@ export async function updateProject(id: string, patch: Partial<Project>): Promis
   const merged: Project = {
     ...existing,
     ...patch,
-    pre: { ...existing.pre, ...(patch.pre || {}) },
+    pre:    { ...existing.pre,    ...(patch.pre    || {}) },
     during: { ...existing.during, ...(patch.during || {}) },
-    post: { ...existing.post, ...(patch.post || {}) },
+    post:   { ...existing.post,   ...(patch.post   || {}) },
   };
   await projectsStore.setItem(id, merged);
   return merged;
