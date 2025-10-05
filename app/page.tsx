@@ -23,15 +23,16 @@ export default function DashboardPage() {
   const [series, setSeries] = useState<SeriesPoint[]>([])
   const [today, setToday] = useState({ deposits: 0, withdrawals: 0, total: 0 })
 
-  // Add Deposit (dropdown + optional note)
-  const [depType, setDepType] = useState<'success' | 'progress' | 'effort'>('success')
-  const [depText, setDepText] = useState('')
+  // Separate notes for each daily question
+  const [successNote, setSuccessNote] = useState('')
+  const [progressNote, setProgressNote] = useState('')
+  const [effortNote, setEffortNote] = useState('')
 
   // Reframe inputs
   const [origText, setOrigText] = useState('')
   const [refrText, setRefrText] = useState('')
 
-  // settings/debug
+  // settings & debug
   const [settings, setSettings] = useState<UserSettings | null>(null)
   const [checklist, setChecklist] = useState<{
     eligible: number
@@ -55,32 +56,25 @@ export default function DashboardPage() {
   }
   useEffect(() => { refresh() }, [])
 
-  // derived: which deposit types already counted today
+  // Which deposit questions already counted today?
   const successDone  = !!checklist?.map?.['q:successLogged']
   const progressDone = !!checklist?.map?.['q:progressLogged']
   const effortDone   = !!checklist?.map?.['q:effortLogged']
 
-  const selectedAlready =
-    (depType === 'success'  && successDone) ||
-    (depType === 'progress' && progressDone) ||
-    (depType === 'effort'   && effortDone)
-
-  function nextUncountedType(): 'success' | 'progress' | 'effort' {
-    // cycle to the next one that hasn't counted yet today
-    if (!successDone) return 'success'
-    if (!progressDone) return 'progress'
-    if (!effortDone) return 'effort'
-    // if all done, keep current
-    return depType
+  // Handlers — each logs its own type (+10 once per day)
+  async function saveSuccess() {
+    await logDepositIfNeeded('success', successNote.trim() || 'Logged success')
+    setSuccessNote('')
+    await refresh()
   }
-
-  // Save for Add Deposit — text is optional, and after saving we auto-advance
-  async function addDepositClick() {
-    const note = depText.trim() || `Logged ${depType}`
-    await logDepositIfNeeded(depType, note)
-    setDepText('')
-    // move the selector to the next uncounted type so you can click Save again
-    setDepType(nextUncountedType())
+  async function saveProgress() {
+    await logDepositIfNeeded('progress', progressNote.trim() || 'Logged progress')
+    setProgressNote('')
+    await refresh()
+  }
+  async function saveEffort() {
+    await logDepositIfNeeded('effort', effortNote.trim() || 'Logged effort')
+    setEffortNote('')
     await refresh()
   }
 
@@ -182,40 +176,75 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* ADD DEPOSIT */}
-      <section className="rounded-2xl border bg-white p-4 space-y-3">
-        <h3 className="font-semibold">Add Deposit</h3>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <select className="rounded border p-2" value={depType} onChange={(e) => setDepType(e.target.value as any)}>
-            <option value="success">Success</option>
-            <option value="progress">Progress</option>
-            <option value="effort">Effort</option>
-          </select>
+      {/* DAILY DEPOSIT QUESTIONS — split into 3 separate inputs */}
+      <section className="rounded-2xl border bg-white p-4 space-y-4">
+        <h3 className="font-semibold">Daily Deposits (+10 each, once per day)</h3>
+
+        {/* Success */}
+        <div className="flex flex-col gap-2 sm:flex-row items-stretch">
+          <div className="w-32 shrink-0 font-medium pt-2">✅ Success</div>
           <input
             className="flex-1 rounded border p-2"
             placeholder="(Optional) What went right?"
-            value={depText}
-            onChange={(e) => setDepText(e.target.value)}
+            value={successNote}
+            onChange={(e) => setSuccessNote(e.target.value)}
           />
           <button
-            onClick={addDepositClick}
-            disabled={selectedAlready}
-            className={`rounded px-4 py-2 border ${
-              selectedAlready ? 'opacity-50 cursor-not-allowed bg-gray-200 border-gray-300' : 'bg-black text-white border-black'
-            }`}
-            title={selectedAlready ? 'This type already counted today' : 'Save deposit (+10 if this type not yet counted today)'}
+            onClick={saveSuccess}
+            disabled={successDone}
+            className={`rounded px-4 py-2 border ${successDone ? 'opacity-50 cursor-not-allowed bg-gray-200 border-gray-300' : 'bg-black text-white border-black'}`}
+            title={successDone ? 'Already counted today' : 'Save (+10)'}
           >
             Save
           </button>
         </div>
+
+        {/* Progress */}
+        <div className="flex flex-col gap-2 sm:flex-row items-stretch">
+          <div className="w-32 shrink-0 font-medium pt-2">📈 Progress</div>
+          <input
+            className="flex-1 rounded border p-2"
+            placeholder="(Optional) What moved forward?"
+            value={progressNote}
+            onChange={(e) => setProgressNote(e.target.value)}
+          />
+          <button
+            onClick={saveProgress}
+            disabled={progressDone}
+            className={`rounded px-4 py-2 border ${progressDone ? 'opacity-50 cursor-not-allowed bg-gray-200 border-gray-300' : 'bg-black text-white border-black'}`}
+            title={progressDone ? 'Already counted today' : 'Save (+10)'}
+          >
+            Save
+          </button>
+        </div>
+
+        {/* Effort */}
+        <div className="flex flex-col gap-2 sm:flex-row items-stretch">
+          <div className="w-32 shrink-0 font-medium pt-2">💪 Effort</div>
+          <input
+            className="flex-1 rounded border p-2"
+            placeholder="(Optional) What effort did you put in?"
+            value={effortNote}
+            onChange={(e) => setEffortNote(e.target.value)}
+          />
+          <button
+            onClick={saveEffort}
+            disabled={effortDone}
+            className={`rounded px-4 py-2 border ${effortDone ? 'opacity-50 cursor-not-allowed bg-gray-200 border-gray-300' : 'bg-black text-white border-black'}`}
+            title={effortDone ? 'Already counted today' : 'Save (+10)'}
+          >
+            Save
+          </button>
+        </div>
+
         <p className="text-xs text-gray-500">
-          Click Save to add the selected type. The selector will auto-advance to the next uncounted type so you can Save again (aim for ✓ on all three).
+          Each question contributes +10 once per local day. Buttons disable after they count.
         </p>
       </section>
 
       {/* REFRAME */}
       <section className="rounded-2xl border bg-white p-4 space-y-3">
-        <h3 className="font-semibold">Reframe a Setback</h3>
+        <h3 className="font-semibold">Reframe a Setback (+10)</h3>
         <div className="flex flex-col gap-2 md:flex-row">
           <input className="flex-1 rounded border p-2" placeholder="Original thought" value={origText} onChange={(e) => setOrigText(e.target.value)} />
           <input className="flex-1 rounded border p-2" placeholder="Constructive reframe" value={refrText} onChange={(e) => setRefrText(e.target.value)} />
@@ -258,6 +287,7 @@ export default function DashboardPage() {
             </span>
           ))}
         </div>
+        <p className="text-xs text-gray-500">PWA: add to home screen; data stored locally in your browser.</p>
       </section>
     </div>
   )
