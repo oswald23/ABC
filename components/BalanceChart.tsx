@@ -1,7 +1,16 @@
 // components/BalanceChart.tsx
 'use client'
 
-import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from 'recharts';
 
 type Point = { date: string; deposits: number; withdrawals: number; total?: number };
 
@@ -15,8 +24,22 @@ export default function BalanceChart({ data }: { data: Point[] }) {
           <YAxis allowDecimals={false} />
           <Tooltip />
           <Legend />
-          <Line type="monotone" dataKey="deposits" dot={false} />
-          <Line type="monotone" dataKey="withdrawals" dot={false} />
+          {/* Deposits: default stroke (blue-ish, theme controlled by Recharts) */}
+          <Line
+            name="deposits"
+            type="monotone"
+            dataKey="deposits"
+            dot={false}
+            stroke="#2563eb"  // blue-600
+          />
+          {/* Withdrawals: red as requested */}
+          <Line
+            name="withdrawals"
+            type="monotone"
+            dataKey="withdrawals"
+            dot={false}
+            stroke="#dc2626"  // red-600
+          />
         </LineChart>
       </ResponsiveContainer>
     </div>
