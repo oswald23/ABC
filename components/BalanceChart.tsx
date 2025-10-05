@@ -24,7 +24,7 @@ export default function BalanceChart({ data }: { data: Point[] }) {
           <YAxis allowDecimals={false} />
           <Tooltip />
           <Legend />
-          {/* Deposits: default stroke (blue-ish, theme controlled by Recharts) */}
+          {/* Deposits line (blue) */}
           <Line
             name="deposits"
             type="monotone"
@@ -32,7 +32,7 @@ export default function BalanceChart({ data }: { data: Point[] }) {
             dot={false}
             stroke="#2563eb"  // blue-600
           />
-          {/* Withdrawals: red as requested */}
+          {/* Withdrawals line (red) */}
           <Line
             name="withdrawals"
             type="monotone"
