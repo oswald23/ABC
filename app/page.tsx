@@ -1,3 +1,4 @@
+// app/page.tsx
 'use client'
 
 import { useEffect, useState } from 'react'
@@ -10,7 +11,8 @@ import {
   todayPoints,
   getSettings,
   saveSettings,
-  todayChecklist,
+  dayCounts,
+  todayKey,
   resetAllData,
   type RoutineKey,
   type UserSettings,
@@ -50,7 +52,9 @@ export default function DashboardPage() {
     const t = await todayPoints()
     setToday({ deposits: t.deposits, withdrawals: t.withdrawals, total: t.total })
     setSettings(await getSettings())
-    const c = await todayChecklist()
+
+    // 🔧 replaced todayChecklist with dayCounts(todayKey())
+    const c = await dayCounts(todayKey())
     setChecklist({ eligible: c.eligible, answered: c.answered, keys: c.keys, map: c.map })
   }
   useEffect(() => { refresh() }, [])
