@@ -104,7 +104,7 @@ const inLastDays = (iso: string, days = 7) =>
   Date.now() - new Date(iso).getTime() < days * 24 * 60 * 60 * 1000;
 
 /** ********************
- * Settings (now merges defaults with stored values)
+ * Settings (merge defaults into stored values)
  ********************* */
 export async function getSettings(): Promise<UserSettings> {
   const defaults: UserSettings = {
@@ -114,7 +114,6 @@ export async function getSettings(): Promise<UserSettings> {
   };
   const stored = await settingsStore.getItem<UserSettings>("user");
 
-  // Merge shallowly and normalize activeRoutines
   const merged: UserSettings = {
     ...defaults,
     ...(stored || {}),
@@ -123,7 +122,7 @@ export async function getSettings(): Promise<UserSettings> {
       : defaults.activeRoutines,
   };
 
-  // If stored settings were missing new fields, persist the upgraded object
+  // Persist upgraded object if fields were missing
   if (
     !stored ||
     stored.includeDepositChecks === undefined ||
@@ -138,6 +137,19 @@ export async function saveSettings(patch: Partial<UserSettings>) {
   const cur = await getSettings();
   const next = { ...cur, ...patch };
   await settingsStore.setItem("user", next);
+}
+
+/** ********************
+ * RESET (for testing)
+ ********************* */
+export async function resetAllData() {
+  await Promise.all([
+    depositsStore.clear(),
+    reframesStore.clear(),
+    routinesStore.clear(),
+    projectsStore.clear(),
+  ]);
+  await settingsStore.removeItem("user"); // will be recreated with defaults
 }
 
 /** ********************
@@ -264,12 +276,10 @@ export async function dayCounts(localDay: string) {
   const keys = Object.keys(map);
   const eligible = keys.length;
   const answered = keys.filter((k) => map[k]).length;
-  return { eligible, answered };
+  return { eligible, answered, keys, map };
 }
 
-/** 7-day series with inactivity rule:
- * Day 1 & 2 of zero-activity deduct; from Day 3 of consecutive inactivity onward, withdrawals=0 until activity resumes.
- */
+/** 7-day series with inactivity rule */
 export async function weeklyPointsSeriesWithDeductions(): Promise<
   { date: string; deposits: number; withdrawals: number; total: number; answered: number; eligible: number }[]
 > {
@@ -307,17 +317,10 @@ export async function todayPoints() {
   );
 }
 
-export async function weeklyPointsTotals() {
-  const s = await weeklyPointsSeriesWithDeductions();
-  return s.reduce(
-    (acc, d) => {
-      acc.deposits += d.deposits;
-      acc.withdrawals += d.withdrawals;
-      acc.total += d.total;
-      return acc;
-    },
-    { deposits: 0, withdrawals: 0, total: 0 }
-  );
+/** Helpful for debugging on UI */
+export async function todayChecklist() {
+  const today = todayKey();
+  return dayCounts(today);
 }
 
 /** ********************
