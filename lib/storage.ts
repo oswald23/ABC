@@ -3,11 +3,15 @@ import localforage from "localforage";
 
 /** Small ID helper: uses crypto.randomUUID() when available */
 const newId = (): string => {
+  // Browser & modern Node (Vercel) expose global crypto.randomUUID
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    // @ts-ignore
+    // @ts-ignore - TS knows crypto from DOM lib; safe in modern runtimes
     return crypto.randomUUID();
   }
-  return Math.random().toString(36).slice(2) + "-" + Date.now().toString(36);
+  // Fallback: not cryptographically strong, but fine for local IDs
+  return (
+    Math.random().toString(36).slice(2) + "-" + Date.now().toString(36)
+  );
 };
 
 /** ********************
@@ -80,21 +84,28 @@ export type CoachDigest = {
   summary: string; // compact human-readable line
 };
 
-/** Settings: which questions are enabled for scoring */
-export type UserSettings = {
-  activeRoutines: RoutineKey[];   // routines that count as daily “questions”
-  includeDepositChecks: boolean;  // S/P/E are questions
-  includeReframeCheck: boolean;   // Reframe is a question
-};
-
 /** ********************
  * LocalForage stores
  ********************* */
-const depositsStore = localforage.createInstance({ name: "cmc", storeName: "deposits" });
-const reframesStore  = localforage.createInstance({ name: "cmc", storeName: "reframes" });
-const routinesStore  = localforage.createInstance({ name: "cmc", storeName: "routines" });
-const projectsStore  = localforage.createInstance({ name: "cmc", storeName: "projects" });
-const settingsStore  = localforage.createInstance({ name: "cmc", storeName: "settings" });
+const depositsStore = localforage.createInstance({
+  name: "cmc",
+  storeName: "deposits",
+});
+
+const reframesStore = localforage.createInstance({
+  name: "cmc",
+  storeName: "reframes",
+});
+
+const routinesStore = localforage.createInstance({
+  name: "cmc",
+  storeName: "routines",
+});
+
+const projectsStore = localforage.createInstance({
+  name: "cmc",
+  storeName: "projects",
+});
 
 /** ********************
  * Utilities
@@ -102,24 +113,6 @@ const settingsStore  = localforage.createInstance({ name: "cmc", storeName: "set
 export const todayKey = (): string => new Date().toISOString().slice(0, 10);
 const inLastDays = (iso: string, days = 7) =>
   Date.now() - new Date(iso).getTime() < days * 24 * 60 * 60 * 1000;
-
-/** ********************
- * Settings
- ********************* */
-export async function getSettings(): Promise<UserSettings> {
-  const s = await settingsStore.getItem<UserSettings>("user");
-  return (
-    s ?? {
-      activeRoutines: ["affirmations", "nightcap", "openDoorway"], // gentle default
-      includeDepositChecks: true,
-      includeReframeCheck: true,
-    }
-  );
-}
-export async function saveSettings(patch: Partial<UserSettings>) {
-  const cur = await getSettings();
-  await settingsStore.setItem("user", { ...cur, ...patch });
-}
 
 /** ********************
  * Deposits
@@ -157,6 +150,8 @@ export async function listDeposits(): Promise<Deposit[]> {
   await depositsStore.iterate<Deposit, void>((v) => arr.push(v));
   return arr.sort((a, b) => b.date.localeCompare(a.date));
 }
+
+/** Convenience alias used by pages */
 export const allDeposits = () => listDeposits();
 
 /** ********************
@@ -197,6 +192,7 @@ export async function listReframes(): Promise<Reframe[]> {
   await reframesStore.iterate<Reframe, void>((v) => arr.push(v));
   return arr.sort((a, b) => b.date.localeCompare(a.date));
 }
+
 export const allReframes = () => listReframes();
 
 /** ********************
@@ -211,11 +207,16 @@ export async function markRoutineDone(
   await routinesStore.setItem(id, rec);
   return rec;
 }
-/** Accept string date or boolean (ignored) as 2nd arg */
-export const markRoutine = (routine: RoutineKey, dateOrFlag?: string | boolean) => {
+
+/** Accepts second arg as string (date) or boolean (ignored) */
+export const markRoutine = (
+  routine: RoutineKey,
+  dateOrFlag?: string | boolean
+) => {
   const date = typeof dateOrFlag === "string" ? dateOrFlag : undefined;
   return markRoutineDone(routine, date);
 };
+
 export async function listRoutineChecks(): Promise<RoutineCheck[]> {
   const arr: RoutineCheck[] = [];
   await routinesStore.iterate<RoutineCheck, void>((v) => arr.push(v));
@@ -223,94 +224,7 @@ export async function listRoutineChecks(): Promise<RoutineCheck[]> {
 }
 
 /** ********************
- * Scoring helpers (Page 1)
- ********************* */
-export async function answeredMapForDay(localDay: string) {
-  const settings = await getSettings();
-  const deposits = await listDeposits();
-  const reframes = await listReframes();
-  const routines = await listRoutineChecks();
-
-  const dayMatch = (iso: string) => iso.slice(0, 10) === localDay;
-  const m: Record<string, boolean> = {};
-
-  if (settings.includeDepositChecks) {
-    m["q:successLogged"] = deposits.some((d) => d.type === "success" && dayMatch(d.date));
-    m["q:progressLogged"] = deposits.some((d) => d.type === "progress" && dayMatch(d.date));
-    m["q:effortLogged"] = deposits.some((d) => d.type === "effort" && dayMatch(d.date));
-  }
-  if (settings.includeReframeCheck) {
-    m["q:reframeLogged"] = reframes.some((r) => dayMatch(r.date));
-  }
-  for (const r of settings.activeRoutines) {
-    m[`q:${r}`] = routines.some((x) => x.routine === r && x.done && dayMatch(x.date));
-  }
-  return m;
-}
-
-export async function dayCounts(localDay: string) {
-  const map = await answeredMapForDay(localDay);
-  const keys = Object.keys(map);
-  const eligible = keys.length;
-  const answered = keys.filter((k) => map[k]).length;
-  return { eligible, answered };
-}
-
-/** 7-day series with inactivity rule:
- * Day 1 & 2 of zero-activity deduct; from Day 3 of consecutive inactivity onward, withdrawals=0 until activity resumes.
- */
-export async function weeklyPointsSeriesWithDeductions(): Promise<
-  { date: string; deposits: number; withdrawals: number; total: number; answered: number; eligible: number }[]
-> {
-  const days: string[] = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(Date.now() - i * 86400000);
-    days.push(d.toISOString().slice(0, 10));
-  }
-  const raw: { date: string; eligible: number; answered: number; deposits: number; withdrawals: number }[] = [];
-  for (const day of days) {
-    const { eligible, answered } = await dayCounts(day);
-    const deposits = answered * 10;
-    let withdrawals = Math.max(0, (eligible - answered) * 10);
-    raw.push({ date: day, eligible, answered, deposits, withdrawals });
-  }
-  // apply inactivity rule
-  let zeroStreak = 0;
-  for (let i = 0; i < raw.length; i++) {
-    if (raw[i].answered === 0) {
-      zeroStreak++;
-      if (zeroStreak >= 3) raw[i].withdrawals = 0;
-    } else {
-      zeroStreak = 0;
-    }
-  }
-  return raw.map((x) => ({ ...x, total: x.deposits - x.withdrawals }));
-}
-
-export async function todayPoints() {
-  const today = todayKey();
-  const series = await weeklyPointsSeriesWithDeductions();
-  const rec = series.find((s) => s.date === today);
-  return (
-    rec ?? { date: today, deposits: 0, withdrawals: 0, total: 0, answered: 0, eligible: 0 }
-  );
-}
-
-export async function weeklyPointsTotals() {
-  const s = await weeklyPointsSeriesWithDeductions();
-  return s.reduce(
-    (acc, d) => {
-      acc.deposits += d.deposits;
-      acc.withdrawals += d.withdrawals;
-      acc.total += d.total;
-      return acc;
-    },
-    { deposits: 0, withdrawals: 0, total: 0 }
-  );
-}
-
-/** ********************
- * Coach digest (unchanged from earlier)
+ * Coach digest & weekly series
  ********************* */
 export async function digestForCoach(): Promise<CoachDigest> {
   const deposits = await listDeposits();
@@ -326,38 +240,104 @@ export async function digestForCoach(): Promise<CoachDigest> {
     reframes: refs7.length,
   };
 
-  const recentDeposits = deps7.slice(0, 3).map((d) => ({ type: d.type, text: d.text, date: d.date }));
-  const recentReframes = refs7.slice(0, 3).map((r) => ({ original: r.original, reframed: r.reframed, date: r.date }));
+  const recentDeposits = deps7.slice(0, 3).map((d) => ({
+    type: d.type,
+    text: d.text,
+    date: d.date,
+  }));
+
+  const recentReframes = refs7.slice(0, 3).map((r) => ({
+    original: r.original,
+    reframed: r.reframed,
+    date: r.date,
+  }));
 
   const summary = `Last 7d — success:${totals.success}, progress:${totals.progress}, effort:${totals.effort}, reframes:${totals.reframes}`;
 
-  return { totals, recent: { deposits: recentDeposits, reframes: recentReframes }, summary };
+  return {
+    totals,
+    recent: { deposits: recentDeposits, reframes: recentReframes },
+    summary,
+  };
 }
+
+/** Legacy one-line digest (string) */
 export async function digestForCoachText(): Promise<string> {
   const d = await digestForCoach();
   return d.summary;
 }
 
+/** Time-series for charts: last 7 days, YYYY-MM-DD + total */
+export async function weeklyDepositSeries(): Promise<
+  { date: string; total: number }[]
+> {
+  const deposits = await listDeposits();
+
+  const days: string[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+    days.push(d.toISOString().slice(0, 10));
+  }
+
+  const map = new Map<string, number>(days.map((d) => [d, 0]));
+  for (const dep of deposits) {
+    const key = dep.date.slice(0, 10);
+    if (map.has(key)) map.set(key, (map.get(key) || 0) + 1);
+  }
+
+  return days.map((d) => ({ date: d, total: map.get(d) || 0 }));
+}
+
+/** # of deposits in last 7 days */
+export async function getWeeklyBalanceNumber(): Promise<number> {
+  const series = await weeklyDepositSeries();
+  return series.reduce((sum, p) => sum + p.total, 0);
+}
+
 /** ********************
- * Projects (unchanged APIs; flexible createProject)
+ * Projects
+ * Accepts either:
+ *   createProject("My Title")
+ * or
+ *   createProject({ title, pre, during, post })
  ********************* */
-export async function createProject(input: string | Partial<Project>): Promise<Project> {
+export async function createProject(
+  input: string | Partial<Project>
+): Promise<Project> {
   const id = newId();
   const now = new Date().toISOString();
 
+  // base/default project
   const base: Project = {
     id,
     title: "Untitled Project",
     date: now,
-    pre: { vaultNotes: [], affirmations: [], arena: { what: "", who: "", where: "" }, flatTires: [], visualizationNotes: "" },
-    during: { cbaUses: 0, shooter: false, lastWordNotes: [] },
-    post: { aar: { what: "", soWhat: "", nowWhat: "" }, esp: { e: "", s: "", p: "" }, confidence: 0 },
+    pre: {
+      vaultNotes: [],
+      affirmations: [],
+      arena: { what: "", who: "", where: "" },
+      flatTires: [],
+      visualizationNotes: "",
+    },
+    during: {
+      cbaUses: 0,
+      shooter: false,
+      lastWordNotes: [],
+    },
+    post: {
+      aar: { what: "", soWhat: "", nowWhat: "" },
+      esp: { e: "", s: "", p: "" },
+      confidence: 0,
+    },
   };
 
   let merged: Project;
+
   if (typeof input === "string") {
+    // Old style: createProject("My Title")
     merged = { ...base, title: input };
   } else {
+    // New style: createProject({ title, pre, during, post })
     merged = {
       ...base,
       title: input.title ?? base.title,
@@ -376,11 +356,16 @@ export async function listProjects(): Promise<Project[]> {
   await projectsStore.iterate<Project, void>((v) => arr.push(v));
   return arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 }
+
 export async function getProject(id: string): Promise<Project | null> {
   const p = await projectsStore.getItem<Project>(id);
   return p ?? null;
 }
-export async function updateProject(id: string, patch: Partial<Project>): Promise<Project | null> {
+
+export async function updateProject(
+  id: string,
+  patch: Partial<Project>
+): Promise<Project | null> {
   const existing = await projectsStore.getItem<Project>(id);
   if (!existing) return null;
   const merged: Project = {
