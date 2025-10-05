@@ -17,25 +17,21 @@ import {
   type UserSettings,
 } from '@/lib/storage'
 
-export default function DashboardPage() {
-  const [series, setSeries] = useState<
-    { date: string; deposits: number; withdrawals: number; total: number }[]
-  >([])
-  const [today, setToday] = useState<{ deposits: number; withdrawals: number; total: number }>({
-    deposits: 0,
-    withdrawals: 0,
-    total: 0,
-  })
+type SeriesPoint = { date: string; deposits: number; withdrawals: number; total: number }
 
-  // deposit dropdown + optional note
+export default function DashboardPage() {
+  const [series, setSeries] = useState<SeriesPoint[]>([])
+  const [today, setToday] = useState({ deposits: 0, withdrawals: 0, total: 0 })
+
+  // Add Deposit (dropdown + optional note)
   const [depType, setDepType] = useState<'success' | 'progress' | 'effort'>('success')
   const [depText, setDepText] = useState('')
 
-  // reframe inputs
+  // Reframe inputs
   const [origText, setOrigText] = useState('')
   const [refrText, setRefrText] = useState('')
 
-  // settings & debug
+  // settings/debug
   const [settings, setSettings] = useState<UserSettings | null>(null)
   const [checklist, setChecklist] = useState<{
     eligible: number
@@ -45,15 +41,8 @@ export default function DashboardPage() {
   } | null>(null)
 
   const allRoutines: RoutineKey[] = [
-    'affirmations',
-    'nightcap',
-    'openDoorway',
-    'visualization',
-    'flatTire',
-    'mentalSanctuary',
-    'breathingReset',
-    'attitudeLockdown',
-    'lastWord',
+    'affirmations','nightcap','openDoorway','visualization','flatTire',
+    'mentalSanctuary','breathingReset','attitudeLockdown','lastWord'
   ]
 
   async function refresh() {
@@ -64,39 +53,47 @@ export default function DashboardPage() {
     const c = await todayChecklist()
     setChecklist({ eligible: c.eligible, answered: c.answered, keys: c.keys, map: c.map })
   }
-  useEffect(() => {
-    refresh()
-  }, [])
+  useEffect(() => { refresh() }, [])
 
   // derived: which deposit types already counted today
-  const successDone = !!checklist?.map?.['q:successLogged']
+  const successDone  = !!checklist?.map?.['q:successLogged']
   const progressDone = !!checklist?.map?.['q:progressLogged']
-  const effortDone = !!checklist?.map?.['q:effortLogged']
+  const effortDone   = !!checklist?.map?.['q:effortLogged']
 
   const selectedAlready =
-    (depType === 'success' && successDone) ||
+    (depType === 'success'  && successDone) ||
     (depType === 'progress' && progressDone) ||
-    (depType === 'effort' && effortDone)
+    (depType === 'effort'   && effortDone)
 
-  // Save for “Add Deposit” — text is optional now
+  function nextUncountedType(): 'success' | 'progress' | 'effort' {
+    // cycle to the next one that hasn't counted yet today
+    if (!successDone) return 'success'
+    if (!progressDone) return 'progress'
+    if (!effortDone) return 'effort'
+    // if all done, keep current
+    return depType
+  }
+
+  // Save for Add Deposit — text is optional, and after saving we auto-advance
   async function addDepositClick() {
     const note = depText.trim() || `Logged ${depType}`
     await logDepositIfNeeded(depType, note)
     setDepText('')
-    refresh()
+    // move the selector to the next uncounted type so you can click Save again
+    setDepType(nextUncountedType())
+    await refresh()
   }
 
   async function addReframeClick() {
     if (!origText.trim() || !refrText.trim()) return
-    await addReframe({ original: origText, reframed: refrfrText })
-    setOrigText('')
-    setRefrText('')
-    refresh()
+    await addReframe({ original: origText, reframed: refrText })
+    setOrigText(''); setRefrText('')
+    await refresh()
   }
 
   async function markRoutineDoneToday(r: RoutineKey) {
     await markRoutine(r, true)
-    refresh()
+    await refresh()
   }
 
   async function toggleRoutineEnabled(r: RoutineKey) {
@@ -104,34 +101,23 @@ export default function DashboardPage() {
     const set = new Set(settings.activeRoutines)
     set.has(r) ? set.delete(r) : set.add(r)
     await saveSettings({ activeRoutines: Array.from(set) })
-    refresh()
+    await refresh()
   }
-  async function toggleIncludeDeposits(on: boolean) {
-    if (!settings) return
-    await saveSettings({ includeDepositChecks: on })
-    refresh()
-  }
-  async function toggleIncludeReframe(on: boolean) {
-    if (!settings) return
-    await saveSettings({ includeReframeCheck: on })
-    refresh()
-  }
+  async function toggleIncludeDeposits(on: boolean) { await saveSettings({ includeDepositChecks: on }); await refresh() }
+  async function toggleIncludeReframe(on: boolean)  { await saveSettings({ includeReframeCheck: on });  await refresh() }
 
   async function resetAll() {
     if (!confirm('Reset ALL local data?')) return
     await resetAllData()
     await refresh()
-    alert('All data cleared.')
+    alert('All data cleared. Defaults restored.')
   }
 
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <h1 className="sr-only">Dashboard</h1>
-        <button
-          onClick={resetAll}
-          className="rounded border px-3 py-2 text-sm hover:bg-gray-50"
-        >
+        <button onClick={resetAll} className="rounded border px-3 py-2 text-sm hover:bg-gray-50">
           Reset Progress
         </button>
       </div>
@@ -148,11 +134,7 @@ export default function DashboardPage() {
         </div>
         <div className="rounded-2xl border bg-white p-4">
           <div className="text-xs uppercase tracking-wide text-gray-500">Total (Today)</div>
-          <div
-            className={`text-3xl font-bold ${
-              today.total >= 0 ? 'text-emerald-600' : 'text-rose-600'
-            }`}
-          >
+          <div className={`text-3xl font-bold ${today.total >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
             {today.total}
           </div>
         </div>
@@ -169,19 +151,11 @@ export default function DashboardPage() {
         <h3 className="font-semibold">Scored Questions</h3>
         <div className="flex flex-wrap items-center gap-4">
           <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={!!settings?.includeDepositChecks}
-              onChange={(e) => toggleIncludeDeposits(e.target.checked)}
-            />
+            <input type="checkbox" checked={!!settings?.includeDepositChecks} onChange={(e) => toggleIncludeDeposits(e.target.checked)} />
             Include deposit checks (Success / Progress / Effort)
           </label>
           <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={!!settings?.includeReframeCheck}
-              onChange={(e) => toggleIncludeReframe(e.target.checked)}
-            />
+            <input type="checkbox" checked={!!settings?.includeReframeCheck} onChange={(e) => toggleIncludeReframe(e.target.checked)} />
             Include reframe check
           </label>
         </div>
@@ -189,7 +163,7 @@ export default function DashboardPage() {
         <div className="pt-2">
           <div className="text-sm font-medium mb-1">Enable routines to count toward points</div>
           <div className="flex flex-wrap gap-2">
-            {allRoutines.map((r) => {
+            {allRoutines.map(r => {
               const enabled = settings?.activeRoutines?.includes(r)
               return (
                 <button
@@ -212,11 +186,7 @@ export default function DashboardPage() {
       <section className="rounded-2xl border bg-white p-4 space-y-3">
         <h3 className="font-semibold">Add Deposit</h3>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <select
-            className="rounded border p-2"
-            value={depType}
-            onChange={(e) => setDepType(e.target.value as any)}
-          >
+          <select className="rounded border p-2" value={depType} onChange={(e) => setDepType(e.target.value as any)}>
             <option value="success">Success</option>
             <option value="progress">Progress</option>
             <option value="effort">Effort</option>
@@ -233,17 +203,13 @@ export default function DashboardPage() {
             className={`rounded px-4 py-2 border ${
               selectedAlready ? 'opacity-50 cursor-not-allowed bg-gray-200 border-gray-300' : 'bg-black text-white border-black'
             }`}
-            title={
-              selectedAlready
-                ? 'This type already counted today'
-                : 'Save deposit (+10 if this type not yet counted today)'
-            }
+            title={selectedAlready ? 'This type already counted today' : 'Save deposit (+10 if this type not yet counted today)'}
           >
             Save
           </button>
         </div>
         <p className="text-xs text-gray-500">
-          Each of Success, Progress, Effort can contribute +10 once per day. Switch the dropdown to another type to add its +10. The note is optional.
+          Click Save to add the selected type. The selector will auto-advance to the next uncounted type so you can Save again (aim for ✓ on all three).
         </p>
       </section>
 
@@ -251,21 +217,9 @@ export default function DashboardPage() {
       <section className="rounded-2xl border bg-white p-4 space-y-3">
         <h3 className="font-semibold">Reframe a Setback</h3>
         <div className="flex flex-col gap-2 md:flex-row">
-          <input
-            className="flex-1 rounded border p-2"
-            placeholder="Original thought"
-            value={origText}
-            onChange={(e) => setOrigText(e.target.value)}
-          />
-          <input
-            className="flex-1 rounded border p-2"
-            placeholder="Constructive reframe"
-            value={refrText}
-            onChange={(e) => setRefrText(e.target.value)}
-          />
-          <button onClick={addReframeClick} className="rounded bg-black text-white px-4 py-2">
-            Reframe
-          </button>
+          <input className="flex-1 rounded border p-2" placeholder="Original thought" value={origText} onChange={(e) => setOrigText(e.target.value)} />
+          <input className="flex-1 rounded border p-2" placeholder="Constructive reframe" value={refrText} onChange={(e) => setRefrText(e.target.value)} />
+          <button onClick={addReframeClick} className="rounded bg-black text-white px-4 py-2">Reframe</button>
         </div>
       </section>
 
@@ -275,19 +229,13 @@ export default function DashboardPage() {
         {settings?.activeRoutines?.length ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
             {settings.activeRoutines.map((r) => (
-              <button
-                key={`done-${r}`}
-                onClick={() => markRoutineDoneToday(r)}
-                className="rounded-lg border px-3 py-2 text-left hover:bg-gray-50"
-              >
+              <button key={`done-${r}`} onClick={() => markRoutineDoneToday(r)} className="rounded-lg border px-3 py-2 text-left hover:bg-gray-50">
                 ✅ Mark “{r}”
               </button>
             ))}
           </div>
         ) : (
-          <p className="text-sm text-gray-500">
-            No routines selected. Enable some above to count them toward points.
-          </p>
+          <p className="text-sm text-gray-500">No routines selected. Enable some above to count them toward points.</p>
         )}
       </section>
 
