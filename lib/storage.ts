@@ -186,6 +186,24 @@ export async function listDeposits(): Promise<Deposit[]> {
 }
 export const allDeposits = () => listDeposits();
 
+/** Helpers to support “count once per day per type” UX */
+export async function hasDepositTypeToday(type: DepositType): Promise<boolean> {
+  const today = todayKey();
+  const list = await listDeposits();
+  return list.some((d) => d.type === type && d.date.slice(0, 10) === today);
+}
+
+/** Log a deposit and tell caller if it newly counted for today’s +10 */
+export async function logDepositIfNeeded(
+  type: DepositType,
+  text: string
+): Promise<{ created: Deposit; counted: boolean }> {
+  const already = await hasDepositTypeToday(type);
+  const created = await addDeposit({ type, text });
+  // “counted” means this action flipped the daily boolean from false→true
+  return { created, counted: !already };
+}
+
 /** ********************
  * Reframes (flexible signature)
  ********************* */
