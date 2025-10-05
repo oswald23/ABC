@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import BalanceChart from '@/components/BalanceChart'
 import {
-  addDeposit,
+  logDepositIfNeeded,
   addReframe,
   markRoutine,
   weeklyPointsSeriesWithDeductions,
@@ -27,14 +27,13 @@ export default function DashboardPage() {
     total: 0,
   })
 
-  // quick-add inputs
+  // quick-add inputs (free text entry)
   const [depText, setDepText] = useState('')
-  const [depType, setDepType] = useState<'success' | 'progress' | 'effort'>('success')
 
   const [origText, setOrigText] = useState('')
   const [refrText, setRefrText] = useState('')
 
-  // settings: which routines & checks count as questions
+  // settings & checklist
   const [settings, setSettings] = useState<UserSettings | null>(null)
   const [checklist, setChecklist] = useState<{ eligible: number; answered: number; keys?: string[]; map?: Record<string, boolean> } | null>(null)
 
@@ -54,9 +53,19 @@ export default function DashboardPage() {
 
   useEffect(() => { refresh() }, [])
 
-  async function addDepositClick() {
-    if (!depText.trim()) return
-    await addDeposit({ type: depType, text: depText })
+  // One-click loggers that count only if not already counted today
+  async function logSuccess() {
+    await logDepositIfNeeded('success', depText || 'Logged success')
+    setDepText('')
+    refresh()
+  }
+  async function logProgress() {
+    await logDepositIfNeeded('progress', depText || 'Logged progress')
+    setDepText('')
+    refresh()
+  }
+  async function logEffort() {
+    await logDepositIfNeeded('effort', depText || 'Logged effort')
     setDepText('')
     refresh()
   }
@@ -102,6 +111,10 @@ export default function DashboardPage() {
     await refresh()
     alert('All data cleared. Defaults restored.')
   }
+
+  const successDone  = !!checklist?.map?.['q:successLogged']
+  const progressDone = !!checklist?.map?.['q:progressLogged']
+  const effortDone   = !!checklist?.map?.['q:effortLogged']
 
   return (
     <div className="space-y-8">
@@ -185,30 +198,46 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* QUICK ADD: Deposit */}
+      {/* ONE-CLICK: Deposit checks */}
       <section className="rounded-2xl border bg-white p-4 space-y-3">
-        <h3 className="font-semibold">Add Deposit</h3>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <select
-            className="rounded border p-2"
-            value={depType}
-            onChange={(e) => setDepType(e.target.value as any)}
+        <h3 className="font-semibold">Quick +10 (once per day each)</h3>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={logSuccess}
+            disabled={successDone}
+            className={`rounded px-3 py-2 border ${successDone ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
+            title={successDone ? 'Already counted today' : 'Log a success'}
           >
-            <option value="success">Success</option>
-            <option value="progress">Progress</option>
-            <option value="effort">Effort</option>
-          </select>
+            ✅ Success
+          </button>
+          <button
+            onClick={logProgress}
+            disabled={progressDone}
+            className={`rounded px-3 py-2 border ${progressDone ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
+            title={progressDone ? 'Already counted today' : 'Log progress'}
+          >
+            📈 Progress
+          </button>
+          <button
+            onClick={logEffort}
+            disabled={effortDone}
+            className={`rounded px-3 py-2 border ${effortDone ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
+            title={effortDone ? 'Already counted today' : 'Log effort'}
+          >
+            💪 Effort
+          </button>
+        </div>
+
+        {/* Optional shared text for the above logs */}
+        <div className="flex flex-col gap-2 sm:flex-row">
           <input
             className="flex-1 rounded border p-2"
-            placeholder="What went right?"
+            placeholder="Optional note for the above actions"
             value={depText}
             onChange={(e) => setDepText(e.target.value)}
           />
-          <button onClick={addDepositClick} className="rounded bg-black text-white px-4 py-2">
-            Save
-          </button>
         </div>
-        <p className="text-xs text-gray-500">Each distinct “question” (e.g., Success / Progress / Effort / Reframe / selected routines) counts +10 once per day.</p>
+        <p className="text-xs text-gray-500">Each of Success, Progress, Effort can contribute +10 once per day.</p>
       </section>
 
       {/* QUICK ADD: Reframe */}
