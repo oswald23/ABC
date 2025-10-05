@@ -11,6 +11,8 @@ import {
   todayPoints,
   getSettings,
   saveSettings,
+  todayChecklist,
+  resetAllData,
   type RoutineKey,
   type UserSettings,
 } from '@/lib/storage'
@@ -32,18 +34,13 @@ export default function DashboardPage() {
   const [origText, setOrigText] = useState('')
   const [refrText, setRefrText] = useState('')
 
-  // settings: which routines count as questions
+  // settings: which routines & checks count as questions
   const [settings, setSettings] = useState<UserSettings | null>(null)
+  const [checklist, setChecklist] = useState<{ eligible: number; answered: number; keys?: string[]; map?: Record<string, boolean> } | null>(null)
+
   const allRoutines: RoutineKey[] = [
-    'affirmations',
-    'nightcap',
-    'openDoorway',
-    'visualization',
-    'flatTire',
-    'mentalSanctuary',
-    'breathingReset',
-    'attitudeLockdown',
-    'lastWord',
+    'affirmations','nightcap','openDoorway','visualization','flatTire',
+    'mentalSanctuary','breathingReset','attitudeLockdown','lastWord'
   ]
 
   async function refresh() {
@@ -51,12 +48,11 @@ export default function DashboardPage() {
     const t = await todayPoints()
     setToday({ deposits: t.deposits, withdrawals: t.withdrawals, total: t.total })
     setSettings(await getSettings())
+    const c = await todayChecklist()
+    setChecklist({ eligible: c.eligible, answered: c.answered, keys: c.keys, map: c.map })
   }
 
-  useEffect(() => {
-    refresh()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  useEffect(() => { refresh() }, [])
 
   async function addDepositClick() {
     if (!depText.trim()) return
@@ -74,7 +70,6 @@ export default function DashboardPage() {
   }
 
   async function markRoutineDoneToday(r: RoutineKey) {
-    // mark done now (counts as answering that question today)
     await markRoutine(r, true)
     refresh()
   }
@@ -82,17 +77,47 @@ export default function DashboardPage() {
   async function toggleRoutineEnabled(r: RoutineKey) {
     if (!settings) return
     const set = new Set(settings.activeRoutines)
-    if (set.has(r)) set.delete(r)
-    else set.add(r)
+    if (set.has(r)) set.delete(r); else set.add(r)
     const next = { ...settings, activeRoutines: Array.from(set) }
     await saveSettings(next)
     setSettings(next)
     refresh()
   }
 
+  async function toggleIncludeDeposits(on: boolean) {
+    if (!settings) return
+    await saveSettings({ includeDepositChecks: on })
+    refresh()
+  }
+  async function toggleIncludeReframe(on: boolean) {
+    if (!settings) return
+    await saveSettings({ includeReframeCheck: on })
+    refresh()
+  }
+
+  async function resetAll() {
+    const ok = confirm('Reset ALL local data? This clears deposits, reframes, routines, projects, and settings.')
+    if (!ok) return
+    await resetAllData()
+    await refresh()
+    alert('All data cleared. Defaults restored.')
+  }
+
   return (
     <div className="space-y-8">
-      {/* TOP SCOREBOARD */}
+      {/* TOP: heading + reset */}
+      <div className="flex items-center justify-between">
+        <h1 className="sr-only">Dashboard</h1>
+        <button
+          onClick={resetAll}
+          className="rounded border px-3 py-2 text-sm hover:bg-gray-50"
+          title="Clear all local data to test scoring from scratch"
+        >
+          Reset Progress
+        </button>
+      </div>
+
+      {/* SCOREBOARD */}
       <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="rounded-2xl border bg-white p-4">
           <div className="text-xs uppercase tracking-wide text-gray-500">Deposits (Today)</div>
@@ -110,13 +135,57 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* CHART: 7-day deposits vs withdrawals */}
+      {/* CHART */}
       <section className="space-y-2">
         <h2 className="text-lg font-semibold">Last 7 Days</h2>
         <BalanceChart data={series} />
       </section>
 
-      {/* QUICK ADD: Deposits */}
+      {/* SETTINGS: which questions count */}
+      <section className="rounded-2xl border bg-white p-4 space-y-3">
+        <h3 className="font-semibold">Scored Questions</h3>
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={!!settings?.includeDepositChecks}
+              onChange={(e) => toggleIncludeDeposits(e.target.checked)}
+            />
+            Include deposit checks (Success / Progress / Effort)
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={!!settings?.includeReframeCheck}
+              onChange={(e) => toggleIncludeReframe(e.target.checked)}
+            />
+            Include reframe check
+          </label>
+        </div>
+
+        <div className="pt-2">
+          <div className="text-sm font-medium mb-1">Enable routines to count toward points</div>
+          <div className="flex flex-wrap gap-2">
+            {allRoutines.map(r => {
+              const enabled = settings?.activeRoutines?.includes(r)
+              return (
+                <button
+                  key={r}
+                  onClick={() => toggleRoutineEnabled(r)}
+                  className={[
+                    'px-3 py-1 rounded-full text-sm border',
+                    enabled ? 'bg-black text-white border-black' : 'bg-white hover:bg-gray-50',
+                  ].join(' ')}
+                >
+                  {r}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* QUICK ADD: Deposit */}
       <section className="rounded-2xl border bg-white p-4 space-y-3">
         <h3 className="font-semibold">Add Deposit</h3>
         <div className="flex flex-col gap-2 sm:flex-row">
@@ -139,10 +208,10 @@ export default function DashboardPage() {
             Save
           </button>
         </div>
-        <p className="text-xs text-gray-500">Each answered “question” is worth +10 points for today.</p>
+        <p className="text-xs text-gray-500">Each distinct “question” (e.g., Success / Progress / Effort / Reframe / selected routines) counts +10 once per day.</p>
       </section>
 
-      {/* QUICK ADD: Reframe (counts as a question if enabled) */}
+      {/* QUICK ADD: Reframe */}
       <section className="rounded-2xl border bg-white p-4 space-y-3">
         <h3 className="font-semibold">Reframe a Setback</h3>
         <div className="flex flex-col gap-2 md:flex-row">
@@ -164,33 +233,9 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* ROUTINE QUESTIONS: enable / mark done */}
-      <section className="rounded-2xl border bg-white p-4 space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold">Routines (count toward points)</h3>
-          <div className="text-xs text-gray-500">Toggle to include/exclude which routines are scored</div>
-        </div>
-
-        {/* Enable/disable which routines count as questions */}
-        <div className="flex flex-wrap gap-2">
-          {allRoutines.map((r) => {
-            const enabled = settings?.activeRoutines?.includes(r)
-            return (
-              <button
-                key={r}
-                onClick={() => toggleRoutineEnabled(r)}
-                className={[
-                  'px-3 py-1 rounded-full text-sm border',
-                  enabled ? 'bg-black text-white border-black' : 'bg-white hover:bg-gray-50',
-                ].join(' ')}
-              >
-                {r}
-              </button>
-            )
-          })}
-        </div>
-
-        {/* Mark done now (counts as answered today) */}
+      {/* ROUTINE: Mark done today */}
+      <section className="rounded-2xl border bg-white p-4 space-y-3">
+        <h3 className="font-semibold">Mark Routines Done (today)</h3>
         {settings?.activeRoutines?.length ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
             {settings.activeRoutines.map((r) => (
@@ -199,13 +244,34 @@ export default function DashboardPage() {
                 onClick={() => markRoutineDoneToday(r)}
                 className="rounded-lg border px-3 py-2 text-left hover:bg-gray-50"
               >
-                ✅ Mark “{r}” done today
+                ✅ Mark “{r}”
               </button>
             ))}
           </div>
         ) : (
           <p className="text-sm text-gray-500">No routines selected. Enable some above to count them toward points.</p>
         )}
+      </section>
+
+      {/* DEBUG: see what counted today */}
+      <section className="rounded-2xl border bg-white p-4 space-y-2">
+        <div className="text-sm font-medium">
+          Debug — Today counted {checklist?.answered ?? 0} / {checklist?.eligible ?? 0}
+        </div>
+        <div className="text-xs text-gray-600">
+          {checklist?.keys?.map((k) => (
+            <span
+              key={k}
+              className={[
+                'inline-block mr-2 mb-2 px-2 py-1 rounded border',
+                checklist?.map?.[k] ? 'bg-emerald-50 border-emerald-300' : 'bg-gray-50 border-gray-200',
+              ].join(' ')}
+              title={String(checklist?.map?.[k])}
+            >
+              {k} {checklist?.map?.[k] ? '✓' : '—'}
+            </span>
+          ))}
+        </div>
       </section>
     </div>
   )
