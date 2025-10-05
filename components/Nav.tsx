@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation'
 
 const tabs = [
   { href: '/', label: 'Dashboard' },
-  { href: '/project', label: 'Project Prep' },
+  { href: '/project', label: 'Project' },
   { href: '/coach', label: 'Coach' },
   { href: '/plan', label: 'Action Plan' },
   { href: '/reminders', label: 'Reminders' },
@@ -14,28 +14,30 @@ const tabs = [
 
 export default function Nav() {
   const pathname = usePathname()
+
   return (
-    <nav className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b">
-      <div className="mx-auto max-w-5xl px-4 py-2 flex gap-2">
-        {tabs.map(t => {
-          const active = pathname === t.href
+    <header className="border-b border-gray-200 dark:border-gray-800">
+      <nav className="container py-3 flex gap-3 flex-wrap">
+        {tabs.map(({ href, label }) => {
+          const active = pathname === href
           return (
             <Link
-              key={t.href}
-              href={t.href}
+              key={href}
+              href={href}
               aria-current={active ? 'page' : undefined}
               className={[
-                'px-3 py-2 rounded-lg text-sm border',
+                'btn',                               // your existing button base class
+                'border',                            // ensure visible boundary
                 active
                   ? 'bg-black text-white border-black'
-                  : 'bg-white hover:bg-gray-50'
+                  : 'bg-white hover:bg-gray-50 border-gray-200 dark:border-gray-700',
               ].join(' ')}
             >
-              {t.label}
+              {label}
             </Link>
           )
         })}
-      </div>
-    </nav>
+      </nav>
+    </header>
   )
 }
