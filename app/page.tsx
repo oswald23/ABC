@@ -1,4 +1,3 @@
-// app/page.tsx
 'use client'
 
 import { useEffect, useState } from 'react'
@@ -56,12 +55,10 @@ export default function DashboardPage() {
   }
   useEffect(() => { refresh() }, [])
 
-  // which questions already counted today?
   const successDone  = !!checklist?.map?.['q:successLogged']
   const progressDone = !!checklist?.map?.['q:progressLogged']
   const effortDone   = !!checklist?.map?.['q:effortLogged']
 
-  // handlers — each logs its own type (+10 once per day)
   async function saveSuccess() {
     await logDepositIfNeeded('success', successNote.trim() || 'Logged success')
     setSuccessNote('')
@@ -252,7 +249,7 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* ROUTINE: Mark done today */}
+      {/* ROUTINES */}
       <section className="rounded-2xl border bg-white p-4 space-y-3">
         <h3 className="font-semibold">Mark Routines Done (today)</h3>
         {settings?.activeRoutines?.length ? (
@@ -287,7 +284,6 @@ export default function DashboardPage() {
             </span>
           ))}
         </div>
-        <p className="text-xs text-gray-500">PWA: add to home screen; data stored locally in your browser.</p>
       </section>
     </div>
   )
